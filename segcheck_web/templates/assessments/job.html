@@ -1,0 +1,75 @@
+{% extends 'base.html' %}
+{% block title %}Live assessment | SegCheck{% endblock %}
+{% block page_styles %}<script src="{{ url_for('static', filename='js/assessment-live.js') }}" defer></script>{% endblock %}
+{% block content %}
+{% set running = job.status in ['queued', 'running'] %}
+<main class="workspace live-workspace" id="live-assessment" data-status-url="{{ url_for('jobs.status', job_id=job.id) }}" data-total="{{ job.total }}" data-created="{{ created_iso or '' }}" data-reasons='{{ reasons|tojson }}'>
+<ol class="stepper" aria-label="Audit progress">
+    <li class="done">Step 1 · Where you are</li><li class="done">Step 2 · What to test</li><li class="done">Step 3 · Firewall</li>
+    <li class="{{ 'current' if running else 'done' }}">Step 4 · Running</li><li class="{{ 'done' if job.assessment_id else '' }}">Report</li>
+</ol>
+
+<section class="setup-card live-progress-card {{ 'is-running' if running else '' }}" id="live-card">
+    <div class="live-hero">
+        <div class="radar">
+            <svg id="radar" viewBox="0 0 260 260" role="img" aria-label="Measured connections out of the authorized total">
+                <defs>
+                    <linearGradient id="ring-gradient" x1="0" x2="1"><stop offset="0" stop-color="#f0915f"/><stop offset="1" stop-color="#4fd1c5"/></linearGradient>
+                    <radialGradient id="sweep-gradient" cx="0" cy="0" r="1"><stop offset="0" stop-color="#f0915f" stop-opacity=".45"/><stop offset="1" stop-color="#f0915f" stop-opacity="0"/></radialGradient>
+                </defs>
+                <circle class="radar-grid" cx="130" cy="130" r="100"/>
+                <circle class="radar-grid" cx="130" cy="130" r="70"/>
+                <circle class="radar-grid" cx="130" cy="130" r="40"/>
+                <line class="radar-grid" x1="30" y1="130" x2="230" y2="130"/>
+                <line class="radar-grid" x1="130" y1="30" x2="130" y2="230"/>
+                <g class="radar-sweep"><path d="M130,130 L130,30 A100,100 0 0,1 216.6,80 Z" fill="url(#sweep-gradient)"/></g>
+                <g id="radar-blips"></g>
+                <circle class="progress-ring-track" cx="130" cy="130" r="118"/>
+                <circle id="progress-ring" class="progress-ring-value" cx="130" cy="130" r="118" pathLength="100" stroke-dasharray="100" stroke-dashoffset="{{ 100 - (job.completed * 100 / job.total)|round(2) if job.total else 100 }}" transform="rotate(-90 130 130)"/>
+                <text id="radar-count" class="radar-text" x="130" y="138" text-anchor="middle">{{ job.completed }}/{{ job.total }}</text>
+                <text class="radar-sub" x="130" y="160" text-anchor="middle">CONNECTIONS</text>
+            </svg>
+        </div>
+        <div>
+            <div class="row">
+                <p class="eyebrow">LIVE EXECUTION · LOCAL PROBE · RUN #{{ job.id }}</p>
+                <span class="spacer"></span>
+                <span class="live-indicator chip chip-info" id="job-status" data-state="{{ job.status }}">{{ job.status|upper }}</span>
+            </div>
+            <h1 id="job-heading">Assessment {{ 'in progress' if running else job.status }}</h1>
+            <p class="muted">{{ policy_name or 'Policy' }} · real TCP, UDP and ICMP probe results appear as each attempt finishes.</p>
+            <div class="live-stats live-metrics">
+                <div class="live-stat"><span>Connections measured</span><strong id="job-count">{{ job.completed }} / {{ job.total }}</strong></div>
+                <div class="live-stat"><span>Reachable</span><strong id="reachable-count">{{ job.events|selectattr('observed', 'equalto', 'reachable')|list|length }}</strong></div>
+                <div class="live-stat"><span>Inconclusive</span><strong id="inconclusive-count">{{ job.events|selectattr('observed', 'equalto', 'inconclusive')|list|length }}</strong></div>
+                <div class="live-stat"><span>Elapsed</span><strong id="elapsed">—</strong></div>
+            </div>
+            <progress id="job-progress" max="{{ job.total }}" value="{{ job.completed }}" aria-label="Connection measurements completed"></progress>
+            <p id="job-message" role="status" aria-live="polite">{{ job.message }}</p>
+            <div class="row">
+                <a id="completed-report" class="primary-action" {% if job.assessment_id %}href="{{ url_for('assessments.assessment_detail', assessment_id=job.assessment_id) }}"{% else %}hidden{% endif %}>Open saved assessment report →</a>
+                <form method="post" action="{{ url_for('jobs.cancel', job_id=job.id) }}" id="cancel-job" {% if not running %}hidden{% endif %}><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><button type="submit" class="danger-button">Cancel remaining attempts</button></form>
+            </div>
+        </div>
+    </div>
+    <p class="scope-banner">Each line shows one attempt and what came back. Whether each rule passed is decided when the run finishes, and shown in the report.</p>
+</section>
+
+<div class="grid-12">
+    <section class="viz-card span-7">
+        <div class="viz-head"><div><span class="section-kicker">PER-ATTEMPT TELEMETRY</span><h2>Connection lanes</h2></div><span class="panel-caption">Bar length = share of the 1 s attempt timeout</span></div>
+        <div class="lanes" id="lanes">
+            {% for event in job.events %}
+            <div class="lane o-{{ event.observed }}"><span class="lane-idx">{{ '%02d'|format(loop.index) }}</span><span class="lane-target">{{ event.host }}{% if event.protocol == 'icmp' %} · ICMP{% else %}:{{ event.port }}{% if event.protocol == 'udp' %}/udp{% endif %}{% endif %}</span><span class="lane-bar"><span></span></span>{% set plain = explain(event.reason, event.protocol) %}<span class="chip chip-{{ event.observed }}">{{ plain.label }}</span><span class="lane-ms">{{ event.duration_ms }} ms</span><span class="lane-reason">{{ plain.text }}</span></div>
+            {% endfor %}
+        </div>
+        <svg id="latency-chart" viewBox="0 0 640 220" role="img" aria-label="Measured connection duration in milliseconds" hidden><text x="20" y="110" class="chart-label">Waiting for measurements</text></svg>
+        <p class="panel-note">Timeout duration is not a measurement of remote server latency. Refusals and timeouts are INCONCLUSIVE: a closed service and a filtered path can look alike.</p>
+    </section>
+    <section class="viz-card span-5">
+        <div class="viz-head"><div><span class="section-kicker">EXECUTION TRACE</span><h2>Worker log</h2></div></div>
+        <ol id="execution-trace" class="execution-trace terminal">{% for event in job.events %}<li>{{ event.host }}:{{ event.port }} · {{ event.observed }} · {{ event.duration_ms }} ms</li>{% else %}<li class="t-dim">Waiting for the worker.</li>{% endfor %}</ol>
+        <p class="panel-note"><a href="{{ url_for('assessments.assessment_workspace') }}">Assessment history</a> · <a href="{{ url_for('jobs.detail', job_id=job.id) }}">Refresh progress manually</a></p>
+    </section>
+</div>
+</main>{% endblock %}

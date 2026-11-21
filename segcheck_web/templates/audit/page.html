@@ -1,0 +1,381 @@
+{% extends "base.html" %}
+{% block title %}New audit | SegCheck{% endblock %}
+{% block page_styles %}<script src="{{ url_for('static', filename='js/audit.js') }}" defer></script>{% endblock %}
+{% block content %}
+{% set here = data.here %}
+{% set fw = data.firewall %}
+{% set steps = data.steps %}
+<main class="audit" id="audit" data-status-url="{{ url_for('audit.firewall_status') }}">
+
+<section class="audit-hero">
+    <div>
+        <p class="eyebrow">NEW AUDIT · RUN FROM THE PC YOU ARE SITTING AT</p>
+        <h1>Test this department's network separation</h1>
+        <p class="lead">Four steps. SegCheck sends small, harmless connection attempts from <strong>this PC</strong> to the systems
+        this department must not reach, checks the firewall's own logs if you connect them, and writes a report.</p>
+    </div>
+    <ol class="audit-steps" aria-label="Progress">
+        {% for number, key, label in [(1, 'here', 'Where you are'), (2, 'targets', 'What to test'), (3, 'firewall', 'Firewall'), (4, 'launch', 'Checks & launch')] %}
+        {% set done = steps.get(key) %}
+        <li class="{{ 'done' if done else '' }}"><a href="#step-{{ number }}"><span class="stepper-dot">{{ '✓' if done else number }}</span><span><small>Step {{ number }}</small>{{ label }}</span></a></li>
+        {% endfor %}
+    </ol>
+</section>
+
+{% for category, message in get_flashed_messages(with_categories=true) %}<p role="status" class="flash-message flash-{{ category }}">{{ message }}</p>{% endfor %}
+
+<!-- ================= STEP 1 ================= -->
+<section class="step-card {{ 'is-done' if steps.here }}" id="step-1">
+    <header class="step-head">
+        <span class="step-badge">Step 1</span>
+        <div><h2>Where you are</h2><p>The network of this PC. Every attempt starts here.</p></div>
+        {% if here %}<span class="chip chip-pass">Done</span>{% endif %}
+    </header>
+
+    {% if here %}
+    <div class="summary-grid">
+        <div><span>Network</span><strong>{{ here.name }}</strong></div>
+        <div><span>This PC</span><strong class="mono">{{ here.ip }}</strong></div>
+        <div><span>Subnet</span><strong class="mono">{{ here.cidr }}</strong></div>
+        <div><span>Kind</span><strong>{{ types.get(here.type, here.type) }}</strong></div>
+    </div>
+    {% if not here.present %}<p class="flash-message flash-error">{{ here.ip }} is no longer an address of this PC (another network or a new DHCP address). Choose this PC's network again below.</p>{% endif %}
+    {% endif %}
+
+    <details class="step-edit" {% if not here or not here.present %}open{% endif %}>
+        <summary>{{ 'Change where you are' if here else 'Set where you are' }}</summary>
+        <form method="post" action="{{ url_for('audit.here') }}" class="step-form" data-here-form>
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            {% if detected %}
+            <p class="hint">SegCheck found these networks on this PC. The one with a gateway is usually your Wi-Fi or Ethernet.</p>
+            <div class="choice-grid">
+                {% for item in detected %}
+                <label class="choice-card">
+                    <input type="radio" name="pick" value="{{ item.source_ip }}" data-ip="{{ item.source_ip }}" data-cidr="{{ item.cidr }}" data-gateway="{{ item.gateway }}"
+                        {% if (here and here.ip == item.source_ip) or (not here and loop.first) %}checked{% endif %}>
+                    <span class="choice-body"><strong>{{ item.interface }}</strong>
+                        <span class="mono">{{ item.source_ip }} · {{ item.cidr }}</span>
+                        <small>{{ 'gateway ' ~ item.gateway if item.gateway else 'no gateway (virtual or isolated adapter)' }}</small></span>
+                </label>
+                {% endfor %}
+            </div>
+            {% else %}
+            <p class="hint">SegCheck could not read this PC's networks automatically. Fill in the fields below (see <span class="mono">ipconfig</span>).</p>
+            {% endif %}
+            {% set first = detected[0] if detected else {} %}
+            <div class="field-grid">
+                <label>Name of this network <input name="name" maxlength="120" required placeholder="e.g. HR department" value="{{ here.name if here else '' }}"><small>Shown in the report.</small></label>
+                <label>What kind of network is it?
+                    <select name="type">{% for key, label in types.items() %}<option value="{{ key }}" {{ 'selected' if (here and here.type == key) or (not here and key == 'corporate') }}>{{ label }}</option>{% endfor %}</select>
+                    <small>Used by the standards, e.g. a card data network is PCI scope.</small></label>
+                <label>Client / organisation <input name="organization" maxlength="160" placeholder="e.g. PaySecure Ltd" value="{{ here.organization if here and here.organization != 'Not set' else '' }}"><small>Optional.</small></label>
+            </div>
+            <details class="manual">
+                <summary>Set the addresses myself</summary>
+                <div class="field-grid">
+                    <label>This PC's IP <input name="ip" class="mono" data-field="ip" maxlength="45" value="{{ here.ip if here else first.get('source_ip', '') }}" required></label>
+                    <label>Subnet <input name="cidr" class="mono" data-field="cidr" maxlength="64" value="{{ here.cidr if here else first.get('cidr', '') }}" required placeholder="10.50.0.0/24"></label>
+                    <label>Gateway (optional) <input name="gateway" class="mono" data-field="gateway" maxlength="45" value="{{ here.gateway if here else first.get('gateway', '') }}"></label>
+                </div>
+            </details>
+            <button type="submit" class="primary">{{ 'Save Step 1' if here else 'Use this network' }}</button>
+        </form>
+    </details>
+</section>
+
+<!-- ================= STEP 2 ================= -->
+<section class="step-card {{ 'is-done' if steps.targets }} {{ 'is-locked' if not here }}" id="step-2">
+    <header class="step-head">
+        <span class="step-badge">Step 2</span>
+        <div><h2>What to test</h2><p>The networks and systems this department must <strong>not</strong> reach (or must reach, for approved services).</p></div>
+        {% if steps.targets %}<span class="chip chip-pass">{{ data.hosts_total }} host{{ '' if data.hosts_total == 1 else 's' }}</span>{% endif %}
+    </header>
+    {% if not here %}<p class="hint">Do Step 1 first.</p>{% else %}
+
+    <article class="target-card own-network" data-target="{{ here.key }}"
+             data-known-url="{{ url_for('audit.known', zone_key=here.key) }}" data-sweep-url="{{ url_for('audit.sweep', zone_key=here.key) }}"
+             data-add-url="{{ url_for('audit.add_hosts', zone_key=here.key) }}">
+        <div class="target-top">
+            <div><h3>Hosts in your own network</h3><span class="mono muted">{{ here.cidr }}</span>
+                <span class="chip chip-idle">Optional · no firewall in between</span></div>
+        </div>
+        <p class="hint">Systems in the same network as this PC (for example the router or a local server). The standards skip them because
+            no boundary separates them; use them in <strong>My own rules</strong> (Step 4) to check a service is closed or open.</p>
+        <div class="host-list">
+            {% for host in here.hosts %}
+            <form method="post" action="{{ url_for('audit.remove_host', asset_id=host.id) }}" class="host-chip">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                <span class="mono">{{ host.address }}</span>{% if host.name != host.address %}<small>{{ host.name }}</small>{% endif %}
+                <button type="submit" aria-label="Remove {{ host.address }}" title="Remove">×</button>
+            </form>
+            {% endfor %}
+        </div>
+        <div class="discover">
+            <div class="row">
+                <button type="button" class="ghost-button" data-known>Show hosts this PC already knows</button>
+                <label class="authorization-check inline-check"><input type="checkbox" data-sweep-ok> <span>I may ping every address in {{ here.cidr }}</span></label>
+                <button type="button" class="ghost-button" data-sweep>Ping sweep</button>
+            </div>
+            <form method="post" action="{{ url_for('audit.add_hosts', zone_key=here.key) }}" class="found" data-found hidden>
+                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                <p class="found-status" data-found-status></p>
+                <div class="found-list" data-found-list></div>
+                <button type="submit" class="primary" data-found-add>Add ticked hosts</button>
+            </form>
+            <p class="found-status" data-discover-status role="status"></p>
+        </div>
+        <form method="post" action="{{ url_for('audit.add_hosts', zone_key=here.key) }}" class="row add-hosts">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <input name="hosts" class="mono" placeholder="e.g. {{ here.gateway or '192.168.1.1' }}" aria-label="Host addresses in your own network">
+            <button type="submit" class="ghost-button">Add hosts</button>
+        </form>
+    </article>
+
+    {% for target in data.targets %}
+    <article class="target-card" data-target="{{ target.key }}"
+             data-known-url="{{ url_for('audit.known', zone_key=target.key) }}" data-sweep-url="{{ url_for('audit.sweep', zone_key=target.key) }}"
+             data-add-url="{{ url_for('audit.add_hosts', zone_key=target.key) }}">
+        <div class="target-top">
+            <div><h3>{{ target.name }}</h3><span class="mono muted">{{ target.cidr }}</span>
+                <span class="chip {{ 'chip-fail' if target.type == 'cde' else 'chip-violet' }}">{{ types.get(target.type, target.type) }}</span></div>
+            <form method="post" action="{{ url_for('audit.remove_target', zone_key=target.key) }}">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                <button type="submit" class="ghost-button small-button" data-confirm="Remove {{ target.name }} and its hosts?">Remove network</button>
+            </form>
+        </div>
+        <div class="host-list">
+            {% for host in target.hosts %}
+            <form method="post" action="{{ url_for('audit.remove_host', asset_id=host.id) }}" class="host-chip">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                <span class="mono">{{ host.address }}</span>{% if host.name != host.address %}<small>{{ host.name }}</small>{% endif %}
+                <button type="submit" aria-label="Remove {{ host.address }}" title="Remove">×</button>
+            </form>
+            {% else %}
+            <p class="hint">No hosts yet. Find them or type them below.</p>
+            {% endfor %}
+        </div>
+        <div class="discover">
+            <div class="row">
+                <button type="button" class="ghost-button" data-known>Show hosts this PC already knows</button>
+                <label class="authorization-check inline-check"><input type="checkbox" data-sweep-ok> <span>I may ping every address in {{ target.cidr }}</span></label>
+                <button type="button" class="ghost-button" data-sweep>Ping sweep</button>
+            </div>
+            <form method="post" action="{{ url_for('audit.add_hosts', zone_key=target.key) }}" class="found" data-found hidden>
+                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                <p class="found-status" data-found-status></p>
+                <div class="found-list" data-found-list></div>
+                <button type="submit" class="primary" data-found-add>Add ticked hosts</button>
+            </form>
+            <p class="found-status" data-discover-status role="status"></p>
+        </div>
+        <form method="post" action="{{ url_for('audit.add_hosts', zone_key=target.key) }}" class="row add-hosts">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <input name="hosts" class="mono" placeholder="Type host IPs, e.g. 10.30.0.20 10.30.0.21" aria-label="Host addresses to add">
+            <button type="submit" class="ghost-button">Add hosts</button>
+        </form>
+    </article>
+    {% endfor %}
+
+    <form method="post" action="{{ url_for('audit.targets') }}" class="add-targets">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <h3>{{ 'Add more target networks' if data.targets else 'Add target networks' }}</h3>
+        <p class="hint">One row per network. Fill in as many as you like and save them together. Leave the network empty to derive it from the first host (as a /24).</p>
+        <div class="target-rows" data-rows>
+            <div class="target-row-head" aria-hidden="true"><span>Name</span><span>Network</span><span>Kind</span><span>Hosts (optional)</span></div>
+            {% for i in range(3) %}
+            <div class="target-row" data-row>
+                <input name="t_name" maxlength="120" placeholder="e.g. Card systems" aria-label="Network name">
+                <input name="t_cidr" class="mono" maxlength="64" placeholder="10.30.0.0/24" aria-label="Network">
+                <select name="t_type" aria-label="Kind of network">{% for key, label in types.items() %}<option value="{{ key }}" {{ 'selected' if key == 'cde' and i == 0 else ('selected' if key == 'custom' and i > 0 else '') }}>{{ label }}</option>{% endfor %}</select>
+                <input name="t_hosts" class="mono" placeholder="10.30.0.20 10.30.0.21" aria-label="Host addresses">
+            </div>
+            {% endfor %}
+        </div>
+        <div class="row">
+            <button type="button" class="ghost-button" data-add-row>+ Another row</button>
+            <span class="spacer"></span>
+            <button type="submit" class="primary">Save target networks</button>
+        </div>
+    </form>
+    {% endif %}
+</section>
+
+<!-- ================= STEP 3 ================= -->
+<section class="step-card {{ 'is-done' if steps.firewall }} {{ 'is-locked' if not data.targets and not steps.firewall }}" id="step-3">
+    <header class="step-head">
+        <span class="step-badge">Step 3</span>
+        <div><h2>Firewall</h2><p>Is there a firewall between this PC and the targets? Its logs turn "no answer" into proof.</p></div>
+        {% if fw %}<span class="chip {{ 'chip-pass' if steps.firewall else 'chip-inconclusive' }}">{{ 'No firewall' if fw.kind == 'none' else 'Firewall' }}</span>{% endif %}
+    </header>
+    {% if not data.targets %}<p class="hint">{{ 'Not needed: you only test hosts in your own network, so no firewall is in between.' if here and here.hosts else 'Do Step 2 first.' }}</p>{% else %}
+
+    {% if fw and fw.kind != 'none' and fw.logging %}
+    {% set live = connectors.get(fw.id) %}
+    {% set port = fw.log_port %}{% set ip = fw.log_listen_ip or here.ip %}
+    <div class="firewall-live" data-device="{{ fw.id }}">
+        <div class="row">
+            <span class="chip device-state {{ 'chip-pass' if live and live.connected else ('chip-inconclusive' if live and live.listening else 'chip-fail') }}">{{ live.error if live and live.error else ('Logs arriving' if live and live.connected else ('Listening, waiting for the first log' if live and live.listening else 'Not listening yet')) }}</span>
+            <span class="mono small">UDP {{ ip }}:{{ port }} · <span class="device-count">{{ live.parsed if live else 0 }}</span> firewall decisions received</span>
+        </div>
+        <p class="small" data-learned {% if not (live and live.learned_sender) %}hidden{% endif %}>Learned the firewall's address from its logs: <strong class="mono" data-learned-ip>{{ live.learned_sender if live else '' }}</strong>.</p>
+        <ol class="device-advice small" {% if not (live and live.advice) %}hidden{% endif %}>{% for tip in (live.advice if live else []) %}<li>{{ tip }}</li>{% endfor %}</ol>
+        <details class="howto" open>
+            <summary>What to set on the firewall (values already filled in)</summary>
+            {% if fw.kind == 'pfsense' %}
+            <ol>
+                <li><strong>pfSense:</strong> Status → System Logs → Settings. Tick <em>Send log messages to remote syslog server</em>. Remote log servers: <code>{{ ip }}:{{ port }}</code>. Remote Syslog Contents: tick <em>Firewall Events</em>. Log message format: <em>BSD (RFC 3164)</em>. Save.<br>
+                    <strong>OPNsense:</strong> System → Settings → Logging / targets → +. Transport <em>UDP(4)</em>, Applications <em>filter (filterlog)</em>, Hostname <code>{{ ip }}</code>, Port <code>{{ port }}</code>, RFC5424 off. Save and Apply.</li>
+                <li>On the rules that block traffic from this network, tick <em>Log packets that are handled by this rule</em>. In pfSense also tick <em>Log packets matched from the default block rules</em> (Status → System Logs → Settings). Apply.</li>
+                <li>Windows may ask whether Python may receive network traffic: choose <em>Allow</em>. The status above turns green with the first log.</li>
+            </ol>
+            {% elif fw.kind == 'iptables' %}
+            <ol>
+                <li>On the Linux firewall, log what is dropped (run as root, before the final drop):<br><code>iptables -A FORWARD -j LOG --log-prefix "SEGCHECK-DROP "</code></li>
+                <li>Send kernel logs to this PC: create <code>/etc/rsyslog.d/90-segcheck.conf</code> with the line <code>kern.* @{{ ip }}:{{ port }}</code>, then <code>systemctl restart rsyslog</code>.</li>
+                <li>Windows may ask whether Python may receive network traffic: choose <em>Allow</em>. The status above turns green with the first log.</li>
+            </ol>
+            {% endif %}
+        </details>
+    </div>
+    {% elif fw %}
+    <p class="hint">{{ 'No firewall (or unknown): attempts go straight through the router. Silence will be reported as unproven, never as passed.' if fw.kind == 'none' else 'Firewall declared without a log feed. Silence will be reported as unproven.' }}</p>
+    {% endif %}
+
+    <details class="step-edit" {% if not fw %}open{% endif %}>
+        <summary>{{ 'Change the firewall setting' if fw else 'Choose' }}</summary>
+        <form method="post" action="{{ url_for('audit.firewall') }}" class="step-form" data-firewall-form>
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <div class="choice-grid two">
+                <label class="choice-card big"><input type="radio" name="mode" value="none" {{ 'checked' if not fw or fw.kind == 'none' }}>
+                    <span class="choice-body"><strong>No firewall, or I don't know</strong><small>Test straight through the router. Reachable = FAIL; no answer = unproven.</small></span></label>
+                <label class="choice-card big"><input type="radio" name="mode" value="firewall" {{ 'checked' if fw and fw.kind != 'none' }}>
+                    <span class="choice-body"><strong>There is a firewall</strong><small>Optionally connect its logs: then a logged block proves the path is closed.</small></span></label>
+            </div>
+            <div class="firewall-details" data-firewall-details>
+                <div class="field-grid">
+                    <label>Firewall type
+                        <select name="kind">
+                            <option value="pfsense" {{ 'selected' if fw and fw.kind == 'pfsense' }}>pfSense or OPNsense</option>
+                            <option value="iptables" {{ 'selected' if fw and fw.kind == 'iptables' }}>Linux (iptables / nftables)</option>
+                            <option value="other" {{ 'selected' if fw and fw.kind == 'other' }}>Other (Fortinet, Cisco, Sophos…), no log feed</option>
+                        </select></label>
+                    <label>Firewall's address in this network <input name="firewall_ip" class="mono" maxlength="45" value="{{ fw.log_sender_ip or fw.interface_ip if fw and fw.kind != 'none' else here.gateway }}" placeholder="usually the gateway">
+                        <small>Usually this network's gateway{{ ' (' ~ here.gateway ~ ')' if here.gateway }}.</small></label>
+                </div>
+                <label class="authorization-check"><input type="checkbox" name="logs" value="on" {{ 'checked' if not fw or fw.logging }}> <span>Connect its logs (recommended). SegCheck only listens; it never logs in to the firewall or changes it.</span></label>
+                <details class="manual"><summary>Advanced</summary>
+                    <div class="field-grid">
+                        <label>Logs come from <input name="sender_ip" class="mono" maxlength="45" placeholder="learn it from the first log"><small>Leave empty: SegCheck uses the firewall's address, and if logs come from another address it offers to switch.</small></label>
+                        <label>This PC receives logs on <input name="listen_ip" class="mono" maxlength="45" placeholder="{{ here.ip }}"><small>Only if this PC has several addresses.</small></label>
+                    </div>
+                </details>
+            </div>
+            <button type="submit" class="primary">Save Step 3</button>
+        </form>
+    </details>
+    {% endif %}
+</section>
+
+<!-- ================= STEP 4 ================= -->
+<section class="step-card {{ 'is-locked' if not (steps.here and steps.targets and steps.firewall) }}" id="step-4">
+    <header class="step-head">
+        <span class="step-badge">Step 4</span>
+        <div><h2>Checks &amp; launch</h2><p>Pick a standard (or your own rules), pick which probes to send, tick, launch.</p></div>
+    </header>
+    {% if not (steps.here and steps.targets and steps.firewall) %}<p class="hint">Finish Steps 1–3 first.</p>{% else %}
+    <form method="post" action="{{ url_for('audit.launch') }}" class="step-form" data-launch-form data-max="{{ max_attempts }}">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <div class="tabs" role="tablist">
+            <label class="tab"><input type="radio" name="mode" value="standard" checked><span>A standard</span></label>
+            <label class="tab"><input type="radio" name="mode" value="custom"><span>My own rules</span></label>
+        </div>
+
+        <div data-mode-panel="standard">
+            {% for family, label in families.items() %}
+            {% set rows = packs|selectattr('pack.family', 'equalto', family)|list %}
+            {% if rows %}
+            <h3 class="family-title">{{ label }}</h3>
+            <div class="pack-grid">
+                {% for row in rows %}{% set p = row.pack %}{% set st = row.status %}
+                <label class="pack-card {{ 'is-off' if not st.ready }}">
+                    <input type="radio" name="pack" value="{{ p.key }}" {{ 'disabled' if not st.ready }} data-targets="{{ st.targets|length }}" data-target-list="{{ st.targets|map(attribute='address')|join(', ') }}"
+                        {% if st.ready and loop.first and family == 'pci' %}checked{% endif %}>
+                    <span class="pack-body">
+                        <span class="pack-meta">{{ p.standard }} · {{ p.controls }}</span>
+                        <strong>{{ p.title }}</strong>
+                        <small>{{ p.summary }}</small>
+                        {% if st.ready %}<span class="chip chip-info">{{ st.targets|length }} target{{ '' if st.targets|length == 1 else 's' }}</span>
+                        {% else %}<span class="pack-why">Not available here: {{ st.reason }}</span>{% endif %}
+                    </span>
+                    <span class="pack-groups" hidden>{% for g in row.groups %}<span data-group="{{ g.key }}" data-cost="{{ g.cost }}" data-label="{{ g.label }}" data-detail="{{ g.detail }}"></span>{% endfor %}</span>
+                </label>
+                {% endfor %}
+            </div>
+            {% endif %}
+            {% endfor %}
+            <h3 class="family-title">Which probes</h3>
+            <p class="hint">All are on by default. Untick what you don't need; only probes the chosen standard uses are sent.</p>
+            <div class="group-grid">
+                {% set seen = [] %}
+                {% for row in packs %}{% for g in row.groups %}{% if g.key not in seen %}{% set _ = seen.append(g.key) %}
+                <label class="group-card"><input type="checkbox" name="groups" value="{{ g.key }}" checked data-cost="{{ g.cost }}">
+                    <span><strong>{{ g.label }}</strong><small>{{ g.detail }}</small></span></label>
+                {% endif %}{% endfor %}{% endfor %}
+            </div>
+            <div class="send-preview" data-send-preview="standard" aria-live="polite"></div>
+        </div>
+
+        <div data-mode-panel="custom" hidden data-here-name="{{ here.name }}" data-here-key="{{ here.key }}">
+            <p class="hint">Each rule: from this PC to some hosts, a service (or your own ports), and whether it must be blocked or
+                must work. Targets can be a host, all hosts of a network, or typed addresses, ranges and subnets
+                (e.g. <span class="mono">10.30.0.10-20</span>, <span class="mono">10.30.0.0/28</span>). Ports can be ranges
+                (<span class="mono">8000-8100</span>).</p>
+            <div class="rules-tools">
+                <label class="ghost-button small-button file-button">Load rules from CSV…<input type="file" accept=".csv,text/csv" data-load-csv hidden></label>
+                <button type="button" class="ghost-button small-button" data-save-csv>Save rules as CSV</button>
+                <a class="text-link small" href="{{ url_for('audit.rules_template') }}">Example CSV (the client's access matrix)</a>
+                <span class="found-status" data-csv-status role="status"></span>
+            </div>
+            <div class="rule-rows" data-rule-rows>
+                <div class="rule-row-head" aria-hidden="true"><span>To</span><span>Service</span><span>Must</span><span></span></div>
+                <div class="rule-row" data-rule-row>
+                    <select name="r_target" aria-label="Target" data-target-select>
+                        {% if here.hosts %}<optgroup label="Your own network ({{ here.cidr }})">
+                            {% for host in here.hosts %}<option value="{{ host.id }}" data-count="1" data-label="{{ host.address }}" data-addresses="{{ host.address }}">{{ host.address }}{{ ' · ' ~ host.name if host.name != host.address }}</option>{% endfor %}
+                        </optgroup>{% endif %}
+                        {% for target in data.targets %}<optgroup label="{{ target.name }} ({{ target.cidr }})">
+                            <option value="net:{{ target.key }}" data-count="{{ target.hosts|length }}" data-label="all {{ target.hosts|length }} host(s) in {{ target.name }}" data-addresses="{{ target.hosts|map(attribute='address')|join(' ') }}">All hosts in {{ target.name }}</option>
+                            {% for host in target.hosts %}<option value="{{ host.id }}" data-count="1" data-label="{{ host.address }}" data-addresses="{{ host.address }}">{{ host.address }}{{ ' · ' ~ host.name if host.name != host.address }}</option>{% endfor %}
+                        </optgroup>{% endfor %}
+                        <option value="text">Type addresses, ranges or subnets…</option>
+                    </select>
+                    <select name="r_service" aria-label="Service" data-service>
+                        {% for key, value in services.items() %}<option value="{{ key }}" data-proto="{{ value[1] }}" data-ports="{{ value[2]|join(', ') }}">{{ value[0] }}</option>{% endfor %}
+                        <option value="custom">Other ports…</option>
+                    </select>
+                    <select name="r_must" aria-label="Must"><option value="deny">be blocked</option><option value="allow">work (approved)</option></select>
+                    <button type="button" class="ghost-button small-button" data-remove-rule aria-label="Remove rule">×</button>
+                    <input name="r_targets" class="mono typed-targets" data-typed-targets placeholder="10.30.0.20  10.30.0.10-20  10.30.0.0/28" aria-label="Target addresses, ranges or subnets" hidden>
+                    <span class="custom-ports" data-custom-ports hidden>
+                        <select name="r_protocol" aria-label="Protocol"><option value="tcp">TCP</option><option value="udp">UDP</option></select>
+                        <input name="r_ports" class="mono" placeholder="8080, 9000-9010" aria-label="Ports">
+                    </span>
+                    <input name="r_reason" class="rule-reason" maxlength="500" placeholder="Reason (optional, shown in the report), e.g. HR must not reach card data — PCI DSS 1.3.1" aria-label="Reason">
+                    <p class="rule-preview" data-rule-preview></p>
+                </div>
+            </div>
+            <button type="button" class="ghost-button" data-add-rule>+ Another rule</button>
+        </div>
+
+        <div class="launch-bar">
+            <div><span class="kpi-label">Attempts</span><strong data-attempts>–</strong><small data-eta></small></div>
+            <label class="authorization-check"><input type="checkbox" name="authorized" value="yes" required>
+                <span>I have written permission to test these targets from {{ here.ip }}.</span></label>
+            <button type="submit" class="primary launch-button">Launch audit</button>
+        </div>
+        <p class="hint small">The run stops by itself: every attempt times out after 1 second, at most {{ max_attempts }} attempts. You can cancel at any time; a cancelled run never produces a half report.</p>
+    </form>
+    {% endif %}
+</section>
+</main>
+{% endblock %}

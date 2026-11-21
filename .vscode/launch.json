@@ -1,0 +1,30 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "SegCheck: start",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "${workspaceFolder}/start_segcheck.py",
+      "console": "integratedTerminal",
+      "justMyCode": true
+    },
+    {
+      "name": "SegCheck: start with a separate test data folder (port 5050)",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "${workspaceFolder}/start_segcheck.py",
+      "args": ["--data-dir", "${workspaceFolder}/.test-data", "--port", "5050"],
+      "console": "integratedTerminal",
+      "justMyCode": true
+    },
+    {
+      "name": "SegCheck: run the guided audit end-to-end checks",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "${workspaceFolder}/scripts/e2e_audit.py",
+      "python": "${workspaceFolder}/.venv/Scripts/python.exe",
+      "console": "integratedTerminal"
+    }
+  ]
+}

@@ -1,0 +1,116 @@
+schema_version: 1
+policy_id: SEGCHECK-POLICY-001
+name: PaySecure Network Segmentation Baseline
+organization: PaySecure (fictional training organization)
+pci_dss_version: "4.0.1"
+
+# These are illustrative policy zones for an isolated student lab.
+# Replace destination_host values with the actual lab IPs before any live testing.
+zones:
+  - id: internet
+    name: Internet / External
+    description: Simulated untrusted external network.
+  - id: dmz
+    name: DMZ / Web
+    description: Public-facing web tier.
+  - id: app
+    name: Application
+    description: Application services that may need narrowly scoped database access.
+  - id: cde
+    name: Cardholder Data Environment
+    description: Systems in the hypothetical payment-card environment.
+  - id: corporate
+    name: Corporate Workstations
+    description: Employee endpoint network.
+  - id: guest
+    name: Guest Wi-Fi
+    description: Untrusted guest devices.
+  - id: admin
+    name: Administration
+    description: Restricted management network.
+
+checks:
+  - id: SEG-001
+    name: Guest must not reach the CDE HTTPS endpoint
+    source_zone: guest
+    destination_zone: cde
+    destination_host: 10.30.0.10
+    protocol: tcp
+    ports: [443]
+    expected: deny
+    rationale: Guest devices are not authorized to reach payment-environment services.
+    pci_requirements: ["11.4.5"]
+    framework_mappings:
+      - framework: pci_dss
+        version: "4.0.1"
+        control_id: "11.4.5"
+        title: "Penetration testing of segmentation controls"
+        relationship: supporting
+
+  - id: SEG-002
+    name: Corporate workstations must not reach the CDE HTTPS endpoint
+    source_zone: corporate
+    destination_zone: cde
+    destination_host: 10.30.0.10
+    protocol: tcp
+    ports: [443]
+    expected: deny
+    rationale: Corporate user endpoints should be isolated unless a documented business need permits access.
+    pci_requirements: ["11.4.5"]
+    framework_mappings:
+      - framework: pci_dss
+        version: "4.0.1"
+        control_id: "11.4.5"
+        title: "Penetration testing of segmentation controls"
+        relationship: supporting
+
+  - id: SEG-003
+    name: Internet must not reach the payment database
+    source_zone: internet
+    destination_zone: cde
+    destination_host: 10.30.0.20
+    protocol: tcp
+    ports: [5432]
+    expected: deny
+    rationale: The payment database must not be directly reachable from the external network.
+    pci_requirements: ["11.4.5"]
+    framework_mappings:
+      - framework: pci_dss
+        version: "4.0.1"
+        control_id: "11.4.5"
+        title: "Penetration testing of segmentation controls"
+        relationship: supporting
+
+  - id: SEG-004
+    name: Application tier may reach the database on the approved port
+    source_zone: app
+    destination_zone: cde
+    destination_host: 10.30.0.20
+    protocol: tcp
+    ports: [5432]
+    expected: allow
+    rationale: The application-to-database path is an explicitly approved business dependency in this example.
+    pci_requirements: ["11.4.5"]
+    framework_mappings:
+      - framework: pci_dss
+        version: "4.0.1"
+        control_id: "11.4.5"
+        title: "Penetration testing of segmentation controls"
+        relationship: supporting
+
+  - id: SEG-005
+    name: Admin zone may reach the approved CDE management service
+    source_zone: admin
+    destination_zone: cde
+    destination_host: 10.30.0.10
+    protocol: tcp
+    ports: [22]
+    expected: allow
+    rationale: Only the restricted administration zone is permitted to use this illustrative management path.
+    pci_requirements: ["11.4.5"]
+    framework_mappings:
+      - framework: pci_dss
+        version: "4.0.1"
+        control_id: "11.4.5"
+        title: "Penetration testing of segmentation controls"
+        relationship: supporting

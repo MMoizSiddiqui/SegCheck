@@ -1,0 +1,11 @@
+{
+  "run_id": "DEMO-001",
+  "description": "Synthetic observations for testing the policy engine only; not the result of a network scan.",
+  "observations": {
+    "SEG-001": "reachable",
+    "SEG-002": "blocked",
+    "SEG-003": "blocked",
+    "SEG-004": "reachable",
+    "SEG-005": "reachable"
+  }
+}

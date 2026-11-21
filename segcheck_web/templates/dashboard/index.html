@@ -1,0 +1,262 @@
+{% extends "base.html" %}
+
+{% block title %}Overview | SegCheck{% endblock %}
+{% block page_styles %}<script src="{{ url_for('static', filename='js/segmap.js') }}" defer></script><script src="{{ url_for('static', filename='js/dashboard-live.js') }}" defer></script>{% endblock %}
+
+{% block content %}
+<main class="workspace dashboard-workspace">
+{% for category, message in get_flashed_messages(with_categories=true) %}<p role="status" class="flash-message flash-{{ category }}">{{ message }}</p>{% endfor %}
+    <div class="dashboard-live-strip"><span class="status-dot" aria-hidden="true"></span><span id="dashboard-sync" role="status">Loading saved workspace statistics…</span><a id="active-run-link" class="chip chip-info" hidden>Open live execution</a></div>
+
+    <section class="page-hero">
+        <div>
+            <span class="section-kicker">ORGANISATION OVERVIEW</span>
+            <h1>Overview</h1>
+            <p class="page-description">
+                {% if environment.get('organization') %}{{ environment.organization }} · {{ environment.get('site', '') }} · probe <span class="mono">{{ environment.get('source_ip', 'not configured') }}</span> in <b>{{ environment.get('source_zone', '—') }}</b>{% else %}A live snapshot of your network assurance workspace.{% endif %}
+            </p>
+        </div>
+        <div class="hero-actions">
+            <a class="ghost-button" href="{{ url_for('assessments.assessment_workspace') }}">History</a>
+            <a class="primary-action" href="{{ url_for('audit.page') }}"><span aria-hidden="true">＋</span> New audit</a>
+        </div>
+    </section>
+
+    {% set here_done = environment.get('source_ip') %}
+    {% set targets_done = asset_total > 0 %}
+    {% set fw_done = environment.get('devices') %}
+    <ol class="audit-steps" aria-label="Audit steps">
+        <li class="{{ 'done' if here_done }}"><a href="{{ url_for('audit.page') }}#step-1"><span class="stepper-dot">{{ '✓' if here_done else 1 }}</span><span><small>Step 1</small>Where you are</span></a></li>
+        <li class="{{ 'done' if targets_done }}"><a href="{{ url_for('audit.page') }}#step-2"><span class="stepper-dot">{{ '✓' if targets_done else 2 }}</span><span><small>Step 2</small>What to test</span></a></li>
+        <li class="{{ 'done' if fw_done }}"><a href="{{ url_for('audit.page') }}#step-3"><span class="stepper-dot">{{ '✓' if fw_done else 3 }}</span><span><small>Step 3</small>Firewall</span></a></li>
+        <li class="{{ 'done' if assessment_total }}"><a href="{{ url_for('audit.page') }}#step-4"><span class="stepper-dot">{{ '✓' if assessment_total else 4 }}</span><span><small>Step 4</small>Checks &amp; launch</span></a></li>
+    </ol>
+
+    <details class="explain">
+        <summary>How to read this overview</summary>
+        <ul>
+            <li><strong>Pass rate</strong> counts only checks a run actually exercised. INCONCLUSIVE (no answer) never counts as passing.</li>
+            <li><strong>Segmentation map</strong>: each line is a tested path from the probe's zone, coloured by its latest saved result. Dashed grey means not tested yet.</li>
+            <li><strong>CDE coverage</strong>: PCI DSS 11.4.5 expects every out-of-scope zone to be tested against the CDE. Untested zones are open questions for your assessor.</li>
+            <li>Everything here comes from saved, immutable reports. Opening this page never sends probes.</li>
+        </ul>
+    </details>
+
+    <svg class="sprite" aria-hidden="true"><defs>
+        <linearGradient id="spark-gradient" x1="0" x2="0" y1="0" y2="1"><stop offset="0" stop-color="#f0915f" stop-opacity=".55"/><stop offset="1" stop-color="#f0915f" stop-opacity="0"/></linearGradient>
+        <linearGradient id="gauge-gradient" x1="0" x2="1"><stop offset="0" stop-color="#f0915f"/><stop offset="1" stop-color="#4fd1c5"/></linearGradient>
+        <radialGradient id="probe-gradient"><stop offset="0" stop-color="#ffd2ac"/><stop offset="1" stop-color="#c4603a"/></radialGradient>
+    </defs></svg>
+
+    <section class="kpi-grid" aria-label="Workspace metrics">
+        <article class="metric-card kpi kpi-violet">
+            <span class="kpi-label">Audits</span>
+            <strong class="kpi-value metric-value" data-metric="assessments">{{ assessment_total }}</strong>
+            <span class="kpi-foot metric-foot">Saved reports on this PC</span>
+            <svg class="kpi-spark" id="spark-runs" viewBox="0 0 120 42" preserveAspectRatio="none" aria-hidden="true"></svg>
+        </article>
+        <article class="metric-card kpi kpi-green">
+            <span class="kpi-label">Networks</span>
+            <strong class="kpi-value metric-value" data-metric="zones">{{ zone_total }}</strong>
+            <span class="kpi-foot metric-foot" id="kpi-cde-foot">This PC's network and the targets</span>
+        </article>
+        <article class="metric-card kpi kpi-rose">
+            <span class="kpi-label">Target hosts</span>
+            <strong class="kpi-value metric-value" data-metric="assets">{{ asset_total }}</strong>
+            <span class="kpi-foot metric-foot">Systems the audit tests</span>
+        </article>
+        <article class="metric-card kpi">
+            <span class="kpi-label">Check results</span>
+            <strong class="kpi-value metric-value">{{ result_totals.total }}</strong>
+            <span class="kpi-foot metric-foot">{{ result_totals.fail }} fail · {{ result_totals.pass }} pass · {{ result_totals.inconclusive }} inconclusive</span>
+        </article>
+    </section>
+
+    <section class="grid-12">
+        <article class="viz-card span-5" aria-labelledby="posture-title">
+            <div class="viz-head"><div><span class="section-kicker">SEGMENTATION POSTURE</span><h2 id="posture-title">Checks meeting expectation</h2></div><span class="chip chip-info">Latest 60 runs</span></div>
+            <div class="posture">
+                <svg id="posture-gauge" viewBox="0 0 230 230" role="img" aria-label="Share of exercised checks that met their expected behaviour">
+                    <circle class="gauge-track" cx="115" cy="115" r="88" pathLength="100" stroke-dasharray="75 100" transform="rotate(135 115 115)"/>
+                    <circle id="gauge-value" class="gauge-value is-empty" cx="115" cy="115" r="88" pathLength="100" stroke-dasharray="0 100" transform="rotate(135 115 115)"/>
+                    <text id="gauge-number" class="gauge-number" x="115" y="118" text-anchor="middle">—</text>
+                    <text class="gauge-caption" x="115" y="142" text-anchor="middle">PASS RATE</text>
+                    <text id="gauge-sub" class="gauge-caption" x="115" y="196" text-anchor="middle">of exercised checks</text>
+                </svg>
+                <div class="posture-legend" id="posture-legend">
+                    <p class="muted small">Complete an authorised assessment to measure posture.</p>
+                </div>
+            </div>
+            <p class="panel-note">INCONCLUSIVE never counts as passing. Checks a run could not exercise (other source zones) are shown separately and are not coverage.</p>
+        </article>
+
+        <article class="viz-card span-7" aria-labelledby="history-title">
+            <div class="viz-head"><div><span class="section-kicker">RECENT EXECUTION HISTORY</span><h2 id="history-title">Results across runs</h2></div><span class="panel-caption">Latest 12 saved assessments · hover for detail</span></div>
+            <svg id="assessment-trend" viewBox="0 0 660 250" role="img" aria-label="Saved result counts by assessment"><text x="30" y="120" class="chart-empty">Complete an assessment to populate this chart.</text></svg>
+            <div class="topo-legend"><span><i class="l-pass"></i>Pass</span><span><i class="l-fail"></i>Fail</span><span><i class="l-inc"></i>Inconclusive</span><span><i class="l-planned"></i>Not exercised</span></div>
+        </article>
+
+        <article class="viz-card span-12 topology-panel" aria-labelledby="topology-title">
+            <div class="viz-head"><div><span class="section-kicker">SEGMENTATION MAP</span><h2 id="topology-title">What each audit tested, and where it failed</h2></div><span class="panel-caption">Click a host for its rules · Replay plays the attempts · step through past audits</span></div>
+            <div class="segmap-shell" data-runs-url="{{ url_for('dashboard.runs_list') }}"></div>
+        </article>
+
+        <article class="viz-card span-6" aria-labelledby="pci-title">
+            <div class="viz-head"><div><span class="section-kicker">PCI DSS 4.0.1 · REQ. 11.4.5 SUPPORT</span><h2 id="pci-title">CDE segmentation coverage</h2></div><span class="chip chip-violet" id="pci-cde-chip">CDE zones: —</span></div>
+            <p class="muted small">Out-of-scope zones that have been exercised against the CDE from a probe. Untested zones remain open questions for the assessor.</p>
+            <div class="coverage-meter" aria-hidden="true"><span id="pci-meter"></span></div>
+            <p class="small" id="pci-meter-label">No CDE configured yet.</p>
+            <ul class="coverage-list" id="pci-sources"></ul>
+            <h3 class="small muted">Supporting control mappings in active policies</h3>
+            <div class="control-bars" id="control-bars"><p class="muted small">No mapped controls in active policies.</p></div>
+        </article>
+
+        <article class="viz-card span-6" aria-labelledby="activity-title">
+            <div class="viz-head"><div><span class="section-kicker">EXECUTION ACTIVITY</span><h2 id="activity-title">Your recent runs</h2></div><a class="text-link" href="{{ url_for('assessments.assessment_workspace') }}">Assessment workspace →</a></div>
+            <ul class="feed" id="activity-feed"><li class="s-idle"><span class="muted">No runs yet.</span><span></span></li></ul>
+            <h3 class="small muted">Saved outcome mix</h3>
+            <div class="row">
+                <svg id="outcomes-ring" viewBox="0 0 220 220" width="150" role="img" aria-label="Pass fail and inconclusive saved result counts"><circle cx="110" cy="110" r="82" class="donut-base"/><text x="110" y="116" text-anchor="middle" class="gauge-number">0</text></svg>
+                <div id="outcomes-legend" class="posture-legend">No saved outcomes yet.</div>
+            </div>
+        </article>
+    </section>
+
+    <section class="dashboard-grid">
+        <article class="dashboard-panel result-panel">
+            <div class="panel-heading">
+                <div>
+                    <span class="section-kicker">ASSESSMENT OUTCOMES</span>
+                    <h2>Recorded check results</h2>
+                </div>
+                <span class="panel-caption">Across saved assessment summaries</span>
+            </div>
+
+            <div class="result-total">
+                <strong data-countup>{{ result_totals.total }}</strong>
+                <span>recorded policy check results</span>
+            </div>
+
+            {% set result_count = result_totals.total %}
+            {% for key, label in [
+                ('pass', 'Pass'),
+                ('fail', 'Fail'),
+                ('inconclusive', 'Inconclusive')
+            ] %}
+                {% set value = result_totals[key] %}
+                {% set percentage = ((value * 100 / result_count)|round(1)) if result_count else 0 %}
+                <div class="result-row">
+                    <div class="result-label">
+                        <span class="result-name result-{{ key }}">{{ label }}</span>
+                        <span class="result-number">{{ value }} · {{ percentage }}%</span>
+                    </div>
+                    <progress class="result-track result-progress result-progress-{{ key }}" value="{{ value }}" max="{{ result_count or 1 }}" aria-label="{{ label }}: {{ value }}">{{ percentage }}%</progress>
+                </div>
+            {% endfor %}
+
+            <p class="panel-note">
+                These totals aggregate saved assessment summaries, which include
+                checks a run could not exercise. They do not represent full PCI DSS
+                certification or organisation-wide coverage.
+            </p>
+        </article>
+
+        <article class="dashboard-panel policy-panel">
+            <div class="panel-heading">
+                <div>
+                    <span class="section-kicker">HISTORY</span>
+                    <h2>Audits on this PC</h2>
+                </div>
+                <a class="text-link" href="{{ url_for('assessments.assessment_workspace') }}">Open history →</a>
+            </div>
+            <div class="policy-stat">
+                <span class="policy-stat-label">Saved audits</span>
+                <strong data-countup>{{ assessment_total }}</strong>
+            </div>
+            <div class="policy-stat">
+                <span class="policy-stat-label">Target networks</span>
+                <strong data-countup>{{ zone_total - (1 if environment.get('source_zone') else 0) if zone_total else 0 }}</strong>
+            </div>
+            <div class="policy-stat">
+                <span class="policy-stat-label">Target hosts</span>
+                <strong data-countup>{{ asset_total }}</strong>
+            </div>
+            <div class="panel-callout">
+                <span class="status-dot"></span>
+                <span>Saved reports can never be changed. You can delete them in History.</span>
+            </div>
+        </article>
+    </section>
+
+    <section class="dashboard-panel recent-panel">
+        <div class="panel-heading">
+            <div>
+                <span class="section-kicker">LATEST ACTIVITY</span>
+                <h2>Recent assessments</h2>
+            </div>
+            <a class="text-link"
+               href="{{ url_for('assessments.assessment_workspace') }}">
+                Assessment workspace →
+            </a>
+        </div>
+
+        {% if recent_assessments %}
+            <div class="recent-table-wrap">
+                <table class="recent-table data-table">
+                    <thead>
+                        <tr>
+                            <th>Policy</th>
+                            <th>Source zone</th>
+                            <th>Results</th>
+                            <th>Created</th>
+                            <th></th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for record in recent_assessments %}
+                            {% set summary = record.summary if record.summary is mapping else {} %}
+                            <tr>
+                                <td>
+                                    <strong>
+                                        {{ record.policy.name if record.policy else
+                                           'Policy #' ~ record.policy_id }}
+                                    </strong>
+                                    <small>Assessment #{{ record.id }}</small>
+                                </td>
+                                <td><span class="chip chip-info">{{ record.source_zone }}</span></td>
+                                <td>
+                                    <span class="chip chip-pass">{{ summary.get('pass', 0) }} pass</span>
+                                    <span class="chip chip-fail">{{ summary.get('fail', 0) }} fail</span>
+                                    <span class="chip chip-inconclusive">{{ summary.get('inconclusive', 0) }} inconclusive</span>
+                                </td>
+                                <td>
+                                    {{ record.created_at.strftime('%d %b %Y, %H:%M') }}
+                                    <small>Stored timestamp (UTC)</small>
+                                </td>
+                                <td>
+                                    <a class="table-link"
+                                       href="{{ url_for('assessments.assessment_detail',
+                                                        assessment_id=record.id) }}">
+                                        View report →
+                                    </a>
+                                </td>
+                            </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        {% else %}
+            <div class="empty-state">
+                <span class="empty-icon">◎</span>
+                <strong>No assessments yet</strong>
+                <p>Run an authorised assessment to see its saved results here.</p>
+                <a class="secondary-action"
+                   href="{{ url_for('assessments.assessment_workspace') }}">
+                    Open assessment workspace
+                </a>
+            </div>
+        {% endif %}
+    </section>
+    <div class="tooltip" id="viz-tooltip" role="tooltip"></div>
+</main>
+{% endblock %}

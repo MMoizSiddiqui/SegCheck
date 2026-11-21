@@ -1,0 +1,1 @@
+"""SegCheck application services."""

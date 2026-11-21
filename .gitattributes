@@ -1,0 +1,9 @@
+* text=auto
+*.sh text eol=lf
+lab/**/Dockerfile* text eol=lf
+lab/**/*.conf text eol=lf
+*.cmd text eol=crlf
+*.ps1 text eol=crlf
+*.ico binary
+*.png binary
+*.exe binary

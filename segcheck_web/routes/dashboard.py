@@ -1,0 +1,151 @@
+"""Authenticated SegCheck overview dashboard."""
+
+from flask import Blueprint, jsonify, render_template
+from flask_login import login_required, current_user
+from sqlalchemy import func
+
+from ..extensions import db
+from ..models import Assessment, Asset, Policy, Zone
+from ..services.environment import settings
+from ..models.jobs import AssessmentJob
+from ..models import utc_now
+from ..services.assessment_jobs import expire_stale_jobs
+from ..services.insights import build_insights
+
+
+dashboard_bp = Blueprint("dashboard", __name__)
+
+
+def _count(query):
+    """Return a safe scalar count."""
+    return query.scalar() or 0
+
+
+@dashboard_bp.get("/api/dashboard")
+@login_required
+def live_snapshot():
+    expire_stale_jobs()
+    totals = {"total": 0, "pass": 0, "fail": 0, "inconclusive": 0}
+    for (summary,) in db.session.query(Assessment.summary).yield_per(200):
+        for key in totals:
+            value = summary.get(key, 0) if isinstance(summary, dict) else 0
+            if isinstance(value, int) and not isinstance(value, bool) and value >= 0:
+                totals[key] += value
+    recent = db.session.query(Assessment.id, Assessment.summary, Assessment.created_at).order_by(Assessment.id.desc()).limit(12).all()
+    _, environment = settings()
+    zones = db.session.query(Zone.zone_key, Zone.name, func.count(Asset.id)).outerjoin(Asset, Asset.zone_id == Zone.id).group_by(Zone.id).order_by(Zone.id).limit(12).all()
+    job = db.session.query(AssessmentJob).filter_by(actor_user_id=current_user.id).filter(AssessmentJob.status.in_(["queued", "running"])).order_by(AssessmentJob.id.desc()).first()
+    response = jsonify({
+        "metrics": {"policies": _count(db.session.query(func.count(Policy.id))),
+                    "assessments": _count(db.session.query(func.count(Assessment.id))),
+                    "zones": _count(db.session.query(func.count(Zone.id))),
+                    "assets": _count(db.session.query(func.count(Asset.id)))},
+        "results": totals,
+        "recent": [{"id": row.id, "summary": row.summary, "created_at": row.created_at.isoformat()} for row in reversed(recent)],
+        "zones": [{"key": key, "name": name, "assets": count,
+                   "cidr": environment.get("networks", {}).get(key, {}).get("cidr", "")} for key, name, count in zones],
+        "source_ip": environment.get("source_ip", "Not configured"),
+        "source_zone": environment.get("source_zone", "Not configured"),
+        "active_job": {"id": job.id, "completed": job.completed, "total": job.total,
+                       "url": f"/jobs/{job.id}"} if job else None,
+        "insights": build_insights(environment, current_user.id),
+        "roles": {key: value.get("role", "custom") for key, value in environment.get("networks", {}).items()},
+        "generated_at": utc_now().isoformat(),
+    })
+    response.headers["Cache-Control"] = "no-store"
+    return response
+
+
+@dashboard_bp.get("/")
+@login_required
+def overview():
+    """Render organisation and assessment metrics from persisted records."""
+
+    policy_total = _count(db.session.query(func.count(Policy.id)))
+    active_policies = _count(
+        db.session.query(func.count(Policy.id)).filter(
+            Policy.status == "active"
+        )
+    )
+    draft_policies = _count(
+        db.session.query(func.count(Policy.id)).filter(
+            Policy.status == "draft"
+        )
+    )
+    archived_policies = _count(
+        db.session.query(func.count(Policy.id)).filter(
+            Policy.status == "archived"
+        )
+    )
+
+    assessment_total = _count(
+        db.session.query(func.count(Assessment.id))
+    )
+    zone_total = _count(db.session.query(func.count(Zone.id)))
+    asset_total = _count(db.session.query(func.count(Asset.id)))
+
+    result_totals = {
+        "total": 0,
+        "pass": 0,
+        "fail": 0,
+        "inconclusive": 0,
+    }
+
+    # Summaries are small, persisted assessment aggregates. The full report
+    # is deliberately not loaded for dashboard-wide totals.
+    for (summary,) in db.session.query(Assessment.summary).all():
+        if not isinstance(summary, dict):
+            continue
+
+        for key in result_totals:
+            value = summary.get(key, 0)
+            if isinstance(value, int) and not isinstance(value, bool) and value >= 0:
+                result_totals[key] += value
+
+    recent_assessments = (
+        db.session.query(Assessment)
+        .order_by(Assessment.created_at.desc(), Assessment.id.desc())
+        .limit(6)
+        .all()
+    )
+
+    return render_template(
+        "dashboard/index.html",
+        policy_total=policy_total,
+        active_policies=active_policies,
+        draft_policies=draft_policies,
+        archived_policies=archived_policies,
+        assessment_total=assessment_total,
+        zone_total=zone_total,
+        asset_total=asset_total,
+        result_totals=result_totals,
+        recent_assessments=recent_assessments,
+        environment=settings()[1],
+    )
+
+
+@dashboard_bp.get("/api/runs")
+@login_required
+def runs_list():
+    """The latest audits, oldest first, for the map's run strip."""
+    from ..services.report_view import build
+    records = db.session.query(Assessment).order_by(Assessment.created_at.desc(), Assessment.id.desc()).limit(20).all()
+    runs = [{"id": r.id, "name": r.policy.name if r.policy else f"Audit {r.id}",
+             "created_at": r.created_at.isoformat() if r.created_at else None,
+             "verdict": build(r.report)["verdict"]} for r in reversed(records)]
+    response = jsonify({"runs": runs})
+    response.headers["Cache-Control"] = "no-store"
+    return response
+
+
+@dashboard_bp.get("/api/runs/<int:assessment_id>/map")
+@login_required
+def run_map(assessment_id):
+    from flask import abort
+    from ..services.report_view import map_data
+    record = db.session.get(Assessment, assessment_id)
+    if record is None:
+        abort(404)
+    response = jsonify(map_data(record))
+    response.headers["Cache-Control"] = "no-store"
+    return response

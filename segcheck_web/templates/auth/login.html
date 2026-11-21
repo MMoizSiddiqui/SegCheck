@@ -1,0 +1,98 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Sign in | SegCheck</title>
+    <link rel="icon" href="{{ url_for('static', filename='favicon.ico') }}">
+    <link
+        rel="stylesheet"
+        href="{{ url_for('static', filename='css/policies.css') }}"
+    >
+    <link
+        rel="stylesheet"
+        href="{{ url_for('static', filename='css/auth.css') }}"
+    >
+</head>
+<body class="auth-page">
+    <main class="auth-layout">
+        <section class="auth-brand-panel">
+            <a class="brand" href="{{ url_for('auth.login') }}">
+                <span class="brand-mark" aria-hidden="true"><svg viewBox="0 0 36 32" width="28" height="26"><circle class="ring-a" cx="13" cy="16" r="9" stroke-width="3" fill="none"/><circle class="ring-b" cx="23" cy="16" r="9" stroke-width="3" fill="none"/></svg></span>
+                <span>SegCheck</span>
+            </a>
+
+            <div class="auth-introduction">
+                <span class="eyebrow">NETWORK ASSURANCE PLATFORM</span>
+                <h1>Verify your network security posture.</h1>
+                <p>
+                    Centralise segmentation policies, technical assessments
+                    and compliance evidence in one controlled workspace.
+                </p>
+            </div>
+
+            <div class="auth-footer">
+                SELF-HOSTED SECURITY ASSURANCE
+            </div>
+        </section>
+
+        <section class="auth-form-panel">
+            <div class="auth-form-container">
+                <span class="eyebrow">ADMINISTRATOR ACCESS</span>
+                <h2>Welcome back</h2>
+                <p class="auth-description">
+                    Sign in to access your SegCheck workspace.
+                </p>
+
+                {% with messages = get_flashed_messages(with_categories=true) %}
+                    {% if messages %}
+                        <div class="auth-messages" role="status">
+                            {% for category, message in messages %}
+                                <p class="auth-message auth-message-{{ category }}">
+                                    {{ message }}
+                                </p>
+                            {% endfor %}
+                        </div>
+                    {% endif %}
+                {% endwith %}
+
+                <form method="POST" action="{{ url_for('auth.login') }}">
+                    <input
+                        type="hidden"
+                        name="csrf_token"
+                        value="{{ csrf_token() }}"
+                    >
+
+                    <label for="username">Username</label>
+                    <input
+                        id="username"
+                        name="username"
+                        type="text"
+                        minlength="3"
+                        maxlength="64"
+                        autocomplete="username"
+                        required
+                        autofocus
+                    >
+
+                    <label for="password">Password</label>
+                    <input
+                        id="password"
+                        name="password"
+                        type="password"
+                        autocomplete="current-password"
+                        required
+                    >
+
+                    <button type="submit">Sign in</button>
+                </form>
+
+                <p class="auth-security-note">
+                    Access is restricted to locally provisioned accounts.
+                </p>
+                {% if setup_available %}<p><a href="{{ url_for('setup.first_admin') }}">Set up the initial administrator</a></p>{% endif %}
+            </div>
+        </section>
+    </main>
+</body>
+</html>

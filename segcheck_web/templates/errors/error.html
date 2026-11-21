@@ -1,0 +1,29 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>{{ title }} | SegCheck</title>
+    <link rel="icon" href="{{ url_for('static', filename='favicon.ico') }}">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/policies.css') }}">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/auth.css') }}">
+</head>
+<body class="auth-page">
+    <main class="error-layout">
+        <a class="brand" href="{{ url_for('dashboard.overview') }}">
+            <span class="brand-mark" aria-hidden="true"><svg viewBox="0 0 36 32" width="28" height="26"><circle class="ring-a" cx="13" cy="16" r="9" stroke-width="3" fill="none"/><circle class="ring-b" cx="23" cy="16" r="9" stroke-width="3" fill="none"/></svg></span>
+            <span>SegCheck</span>
+        </a>
+        <section class="error-card" role="alert">
+            <span class="eyebrow">ERROR {{ code }}</span>
+            <h1>{{ title }}</h1>
+            <p class="error-meaning">{{ meaning }}</p>
+            {% if detail %}<p class="error-detail"><strong>Details:</strong> {{ detail }}</p>{% endif %}
+            <h2>What to do</h2>
+            <ol>{% for step in steps %}<li>{{ step }}</li>{% endfor %}</ol>
+            {% if incident %}<p class="error-detail">Reference: <span class="mono">{{ incident }}</span></p>{% endif %}
+            <p class="error-actions">{% if back_url %}<a class="button-link" href="{{ back_url }}">Go back</a> {% endif %}<a class="button-link" href="{{ url_for('dashboard.overview') }}">Overview</a></p>
+        </section>
+    </main>
+</body>
+</html>

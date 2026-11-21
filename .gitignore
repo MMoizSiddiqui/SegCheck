@@ -1,0 +1,43 @@
+.env
+.env.*
+*.env
+secrets.json
+config.local.*
+
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+venv/
+env/
+dist/
+build/
+*.egg-info/
+
+results*.json
+scan_*.json
+*.pcap
+*.log
+
+*.sqlite
+*.sqlite-*
+*.sqlite3
+*.sqlite3-*
+*.db
+*.db-*
+
+# Local update backups contain installation data.
+.segcheck-update-backups/
+
+# Local packaged handoff (may include a private database snapshot).
+deliverables/
+
+# Container lab local state
+
+lab/office/.office-admin
+
+# Test run outputs and local test data
+reports/
+.test-data/
+data/
+

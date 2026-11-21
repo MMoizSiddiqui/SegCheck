@@ -1,0 +1,77 @@
+{% extends "base.html" %}
+{% block title %}History | SegCheck{% endblock %}
+{% block content %}
+{% set labels = {'violation': ('Violation', 'chip-fail'), 'enforced': ('Enforced', 'chip-pass'), 'unproven': ('Unproven', 'chip-inconclusive')} %}
+<main class="history">
+<section class="audit-hero compact">
+    <div>
+        <p class="eyebrow">HISTORY · SAVED ON THIS PC</p>
+        <h1>Past audits</h1>
+        <p class="lead">Every audit run on this PC, newest first. Open a report, download its evidence, or delete it.</p>
+    </div>
+    <a class="primary-action" href="{{ url_for('audit.page') }}">New audit</a>
+</section>
+
+{% for category, message in get_flashed_messages(with_categories=true) %}<p role="status" class="flash-message flash-{{ category }}">{{ message }}</p>{% endfor %}
+
+{% if rows %}
+<div class="history-list">
+    {% for row in rows %}
+    <article class="history-item">
+        {% if row.kind == 'report' %}{% set label = labels.get(row.status, ('Unproven', 'chip-inconclusive')) %}
+        <span class="chip {{ label[1] }}">{{ label[0] }}</span>
+        <div class="history-main">
+            <a href="{{ url_for('assessments.assessment_detail', assessment_id=row.id) }}"><strong>{{ row.name }}</strong></a>
+            <small>#{{ row.id }} · {{ row.created_at.strftime('%d %b %Y, %H:%M') }} UTC · from {{ row.source_zone }}{{ ' (' ~ row.source_ip ~ ')' if row.source_ip }}</small>
+            <small class="muted">{{ row.headline }}</small>
+        </div>
+        <div class="history-actions">
+            <a class="ghost-button small-button" href="{{ url_for('assessments.assessment_detail', assessment_id=row.id) }}">Open</a>
+            <a class="ghost-button small-button" href="{{ url_for('assessments.assessment_pdf', assessment_id=row.id) }}">PDF</a>
+            <a class="ghost-button small-button" href="{{ url_for('assessments.assessment_evidence_bundle', assessment_id=row.id) }}">Evidence .zip</a>
+            <form method="post" action="{{ url_for('assessments.delete_assessment', assessment_id=row.id) }}">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                <button type="submit" class="ghost-button small-button danger" data-confirm="Delete audit #{{ row.id }} ({{ row.name }}) from this PC? This cannot be undone.">Delete</button>
+            </form>
+        </div>
+        {% else %}
+        <span class="chip {{ 'chip-info' if row.active else 'chip-idle' }}">{{ 'Running' if row.active else row.status|capitalize }}</span>
+        <div class="history-main">
+            <a href="{{ url_for('jobs.detail', job_id=row.id) }}"><strong>{{ row.name }}</strong></a>
+            <small>Run {{ row.id }} · {{ row.created_at.strftime('%d %b %Y, %H:%M') }} UTC · no report</small>
+            <small class="muted">{{ row.headline }}</small>
+        </div>
+        <div class="history-actions">
+            <a class="ghost-button small-button" href="{{ url_for('jobs.detail', job_id=row.id) }}">Open</a>
+            {% if not row.active %}
+            <form method="post" action="{{ url_for('assessments.delete_run', job_id=row.id) }}">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                <button type="submit" class="ghost-button small-button danger" data-confirm="Delete this run?">Delete</button>
+            </form>
+            {% endif %}
+        </div>
+        {% endif %}
+    </article>
+    {% endfor %}
+</div>
+
+<details class="danger-zone">
+    <summary>Delete everything</summary>
+    <form method="post" action="{{ url_for('assessments.delete_all') }}" class="step-form">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <p>Deletes every audit and report on this PC and compacts the database file, so the data is really gone. Download any evidence you need first.</p>
+        <label class="authorization-check"><input type="checkbox" name="firewall_logs" value="on" checked> <span>Also delete the saved firewall logs</span></label>
+        <label class="authorization-check"><input type="checkbox" name="backups" value="on"> <span>Also delete the automatic database backups (they hold older copies)</span></label>
+        <label>Type <strong>DELETE</strong> to confirm <input name="confirm" autocomplete="off" required pattern="DELETE" class="mono"></label>
+        <button type="submit" class="ghost-button danger">Delete all audits</button>
+    </form>
+</details>
+{% else %}
+<section class="step-card empty-state">
+    <h2>No audits yet</h2>
+    <p>Run your first audit: it takes four steps.</p>
+    <a class="primary-action" href="{{ url_for('audit.page') }}">Start a new audit</a>
+</section>
+{% endif %}
+</main>
+{% endblock %}
