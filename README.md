@@ -255,9 +255,9 @@ To leave the PC clean after the audit:
 |---|---|
 | **Learn SegCheck hands-on (labs, every option, every error)** | [docs/HANDS_ON_GUIDE.md](docs/HANDS_ON_GUIDE.md) |
 | Rebuild SegCheck.exe after changing `launcher/SegCheck.cs` (a test fails until you do) · redraw the icon | `python scripts/build_launcher.py` · `python launcher/make_icon.py` |
-| Docker lab (six-department office with a real firewall and a hidden misconfiguration) | [docs/CONTAINER_LABS.md](docs/CONTAINER_LABS.md) |
-| Manual VirtualBox test (Guest / pfSense / CDE VMs) | [docs/LAB_TEST_GUIDE.md](docs/LAB_TEST_GUIDE.md) |
-| What was tested and what is still open | [VERIFICATION.md](VERIFICATION.md) · [ROADMAP.md](ROADMAP.md) |
+| Docker lab (six-department office with a real firewall and a hidden misconfiguration) | [lab/README.md](lab/README.md) |
+| Manual VirtualBox test (Guest / pfSense / CDE VMs) | [docs/VIRTUALBOX_LAB.md](docs/VIRTUALBOX_LAB.md) |
+| What was tested and what is still open | [docs/VERIFICATION.md](docs/VERIFICATION.md) · [docs/ROADMAP.md](docs/ROADMAP.md) |
 | Framework mappings | [docs/FRAMEWORK_REFERENCES.md](docs/FRAMEWORK_REFERENCES.md) |
 
 **Tests**
@@ -281,9 +281,20 @@ upgrades and compares records (`--check` for read-only). The launcher does this 
 against its own data and secret, on loopback only.
 
 **Project layout:**
-- `segcheck/` is the engine (policies, probes, evidence) and `segcheck_web/` the web app
-  (`routes/audit.py` + `services/audit_setup.py` = the four steps, `services/history.py` = History);
-- `migrations/` holds the database schema;
-- `launcher/` holds SegCheck.exe's source and its icon;
-- `lab/office/` is the Docker office lab;
-- `tests/`, `fixtures/` and `scripts/` hold the tests, test data and build tools.
+```
+SegCheck.exe            double-click to set up and start (Windows)
+start_segcheck.py       the same start-up for any OS: python start_segcheck.py
+segcheck/               engine: policies, probes, firewall-log evidence
+segcheck_web/           web app (routes/audit.py + services/audit_setup.py = the four steps,
+                        services/history.py = History, services/report_view.py = the report)
+migrations/             database schema (upgraded automatically at start)
+launcher/               SegCheck.exe source (C#) and icon
+lab/                    Docker office lab with a real firewall (lab/README.md)
+docs/                   hands-on guide, VirtualBox lab, verification, roadmap, framework references
+scripts/                end-to-end checks, launcher build, manual database upgrade
+tests/                  automated tests (tests/fixtures = test data)
+```
+
+## License
+
+[MIT](LICENSE). Use it only on networks you own or have written permission to test.

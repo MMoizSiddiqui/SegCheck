@@ -6,7 +6,7 @@ from pathlib import Path
 
 from segcheck_web.services.firewall_connector import DeviceListener, parse_firewall_line
 
-CAPTURE = Path(__file__).resolve().parents[1] / "fixtures" / "pfsense-events.jsonl"  # real pfSense filterlog capture
+CAPTURE = Path(__file__).resolve().parents[1] / "tests" / "fixtures" / "pfsense-events.jsonl"  # real pfSense filterlog capture
 
 
 def real_messages():

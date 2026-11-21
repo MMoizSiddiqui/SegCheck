@@ -11,7 +11,7 @@ from segcheck.policy_engine import (
 )
 
 ROOT = Path(__file__).resolve().parents[1]
-POLICY_PATH = ROOT / "fixtures" / "lab-policy.yaml"
+POLICY_PATH = ROOT / "tests" / "fixtures" / "lab-policy.yaml"
 
 
 def test_example_policy_loads_and_has_five_checks():
@@ -53,7 +53,7 @@ def test_demo_observations_report_one_violation():
     import json
 
     policy = load_policy(POLICY_PATH)
-    data = json.loads((ROOT / "fixtures" / "sample-observations.json").read_text(encoding="utf-8"))
+    data = json.loads((ROOT / "tests" / "fixtures" / "sample-observations.json").read_text(encoding="utf-8"))
     report = evaluate_policy(policy, data["observations"])
     assert report["summary"] == {"total": 5, "pass": 2, "fail": 1, "inconclusive": 2}
     assert report["results"][0]["check_id"] == "SEG-001"

@@ -21,7 +21,7 @@ from segcheck_web.services.policy_import import (
 
 LAB_POLICY = (
     Path(__file__).resolve().parents[1]
-    / "fixtures"
+    / "tests" / "fixtures"
     / "lab-policy.yaml"
 )
 

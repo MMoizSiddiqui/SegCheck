@@ -10,7 +10,6 @@ COPY segcheck_web ./segcheck_web
 COPY migrations ./migrations
 COPY scripts ./scripts
 COPY tests ./tests
-COPY fixtures ./fixtures
 COPY pytest.ini start_segcheck.py SegCheck.exe .gitignore ./
 COPY launcher ./launcher
 RUN chown -R segcheck /app

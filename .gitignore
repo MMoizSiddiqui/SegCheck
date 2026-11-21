@@ -41,3 +41,6 @@ reports/
 .test-data/
 data/
 
+# Editor settings
+.vscode/
+.idea/

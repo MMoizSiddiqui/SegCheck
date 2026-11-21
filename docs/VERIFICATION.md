@@ -87,4 +87,4 @@ Firewall, Step 4 · Checks & launch) and **History**.
 ## Not yet verified
 
 - A complete run on a client's department PC (Python install through SmartScreen, a company proxy).
-- The VirtualBox pfSense / Kali / CDE lab ([docs/LAB_TEST_GUIDE.md](docs/LAB_TEST_GUIDE.md)): add the results here.
+- The VirtualBox pfSense / Kali / CDE lab ([VIRTUALBOX_LAB.md](VIRTUALBOX_LAB.md)): add the results here.

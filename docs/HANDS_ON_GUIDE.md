@@ -12,7 +12,7 @@ Every lab says what to do, what you should see, and why.
 | 4 | Rehearse a client visit: install on a "fresh" PC, audit, take the evidence, leave the PC clean | This PC | 30 min |
 | 5 | Break it on purpose: every error message and what it fixes by itself | This PC | 30 min |
 | 6 | The automated tests: what they prove | This PC (+ Docker) | 20 min |
-| 7 | Optional: the VirtualBox pfSense lab | VirtualBox VMs | see [LAB_TEST_GUIDE.md](LAB_TEST_GUIDE.md) |
+| 7 | Optional: the VirtualBox pfSense lab | VirtualBox VMs | see [VIRTUALBOX_LAB.md](VIRTUALBOX_LAB.md) |
 
 Only ever test networks you own or have written permission to test. Everything here uses your own PC,
 your own home network, or a fake network inside Docker.

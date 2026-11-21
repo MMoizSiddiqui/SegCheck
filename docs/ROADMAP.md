@@ -23,7 +23,9 @@ multi-page policy management were removed on purpose (20–21 November 2026) to 
 - **Step 4:**
   - 8 standards (PCI DSS 4.0.1, NIST SP 800-53, ISO/IEC 27002, CIS v8) with tick-box probe groups and a
     live attempt count;
-  - or simple own rules (target · service · must be blocked / must work);
+  - or own rules: hosts, whole networks, or typed addresses, ranges and subnets; services, bundles or
+    port ranges; must be blocked / must work; a reason per rule shown in the report;
+  - the client's access matrix as a CSV (load keeps this department's rows; save for the next PC);
   - one launch: up to 400 attempts as one run.
 - **Run and report:**
   - live progress, cancel, one run at a time;
@@ -38,7 +40,10 @@ multi-page policy management were removed on purpose (20–21 November 2026) to 
 ## Future work
 | Item | Why |
 |---|---|
-| Save and load a Step 1–3 setup as a file | Set up each department PC in one click instead of retyping targets |
-| Combined report across departments | One overview from the evidence bundles of all departments |
+| Combined client report across departments | One overview from all departments' evidence bundles |
+| Compare two runs | Show what changed between an audit and its retest |
+| Path trace (traceroute) for failed rules | Show which hop let forbidden traffic through |
+| Banner grab on reachable ports | Name the service that answered, not just the port |
+| Re-audit reminders | PCI DSS expects segmentation tests at least every 12 months (6 for service providers) |
 | Read-only firewall configuration import (e.g. pfSense `config.xml`) | Compare the rule intent with the observed reachability |
 | Code-signed SegCheck.exe | Avoid the SmartScreen warning on client PCs |

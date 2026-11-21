@@ -131,7 +131,7 @@ box and that the GUEST interface's default block rule isn't catching them unlogg
 
 ## 8. Record the outcome
 
-Add your results to `VERIFICATION.md` under a "Manual VM lab acceptance" heading: date,
+Add your results to [VERIFICATION.md](VERIFICATION.md) under a "Manual VM lab acceptance" heading: date,
 Act 1 and Act 2 outcomes, the report numbers, and any deviations. Keep the PDFs from both acts
 as evidence.
 

@@ -4,8 +4,9 @@ A six-department company network you can run on any PC with Docker Desktop. It u
 real Linux firewall, so SegCheck's results come from real packets. pfSense itself cannot run in Docker
 (it is FreeBSD), so an iptables router plays its role: it forwards or drops between departments and
 sends every decision to SegCheck by syslog. The VirtualBox pfSense lab stays the final manual test
-([LAB_TEST_GUIDE.md](LAB_TEST_GUIDE.md)).
+([docs/VIRTUALBOX_LAB.md](../docs/VIRTUALBOX_LAB.md)).
 
+From the SegCheck folder:
 ```bash
 cd lab/office
 ```
@@ -32,8 +33,8 @@ The `auditor` container runs SegCheck and has an address in Guest, Corporate, DM
 sends each through the firewall): it plays the department PCs an auditor sits at. The firewall sends its
 logs to 10.40.0.100:5514.
 
-Walk through it by hand: [HANDS_ON_GUIDE.md, Lab 3](HANDS_ON_GUIDE.md#lab-3-audit-paysecure-ltd-a-fake-company-with-a-real-firewall-docker).
-Or automated (35 checks):
+Walk through it by hand: [docs/HANDS_ON_GUIDE.md, Lab 3](../docs/HANDS_ON_GUIDE.md#lab-3-audit-paysecure-ltd-a-fake-company-with-a-real-firewall-docker).
+Or automated (35 checks), from the SegCheck folder:
 ```bash
 python scripts/e2e_office.py
 ```

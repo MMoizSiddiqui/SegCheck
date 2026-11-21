@@ -7,7 +7,7 @@ from segcheck.policy_engine import load_policy
 from segcheck.probe import ProbeOutcome, probe_policy, tcp_connect_probe
 
 ROOT = Path(__file__).resolve().parents[1]
-POLICY_PATH = ROOT / "fixtures" / "lab-policy.yaml"
+POLICY_PATH = ROOT / "tests" / "fixtures" / "lab-policy.yaml"
 
 
 def test_probe_only_tests_checks_from_selected_source_zone(monkeypatch):
