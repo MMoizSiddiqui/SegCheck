@@ -8,8 +8,8 @@ audits, admin network) and the lab reorganisation.
 
 | Test | Command | Last result |
 |---|---|---|
-| Regression suite (Windows) | `python -m pytest -q` | **607 passed**, 17 skipped (Linux-only) |
-| Regression suite (Linux, inside the lab's auditor container, non-root) | `docker compose -f lab/docker/docker-compose.yml exec auditor python -m pytest -q` | **624 passed** |
+| Regression suite (Windows) | `python -m pytest -q` | **608 passed**, 17 skipped (Linux-only) |
+| Regression suite (Linux, inside the lab's auditor container, non-root) | `docker compose -f lab/docker/docker-compose.yml exec auditor python -m pytest -q` | **625 passed** |
 | Guided audit end to end (fresh instance, browser-style HTTP client) | `python scripts/e2e_audit.py` | **78/78** |
 | Office lab with a real Linux firewall (Docker), every department, fix, retest, compare | `lab/Reset lab (fresh, with loophole).cmd` (or `docker compose -f lab/docker/docker-compose.yml up -d --build`), then `python scripts/e2e_office.py` | **49/49** |
 | Lab buttons | `lab/Firewall - fix loophole.cmd`, `lab/Firewall - add loophole.cmd` | switch the running firewall both ways; audits kept |

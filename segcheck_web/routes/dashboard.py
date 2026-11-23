@@ -10,7 +10,7 @@ from ..services.environment import settings
 from ..models.jobs import AssessmentJob
 from ..models import utc_now
 from ..services.assessment_jobs import expire_stale_jobs
-from ..services.insights import build_insights
+from ..services.insights import assessment_breakdown, build_insights
 
 
 dashboard_bp = Blueprint("dashboard", __name__)
@@ -21,16 +21,23 @@ def _count(query):
     return query.scalar() or 0
 
 
+def result_totals():
+    """Checks across every saved audit, counted the way each report counts them
+    (a block proven by the firewall log is passed, not "no answer")."""
+    totals = {"total": 0, "pass": 0, "fail": 0, "inconclusive": 0}
+    for (report,) in db.session.query(Assessment.report).yield_per(50):
+        counts = assessment_breakdown(report if isinstance(report, dict) else {})
+        for key in ("pass", "fail", "inconclusive"):
+            totals[key] += counts[key]
+    totals["total"] = totals["pass"] + totals["fail"] + totals["inconclusive"]
+    return totals
+
+
 @dashboard_bp.get("/api/dashboard")
 @login_required
 def live_snapshot():
     expire_stale_jobs()
-    totals = {"total": 0, "pass": 0, "fail": 0, "inconclusive": 0}
-    for (summary,) in db.session.query(Assessment.summary).yield_per(200):
-        for key in totals:
-            value = summary.get(key, 0) if isinstance(summary, dict) else 0
-            if isinstance(value, int) and not isinstance(value, bool) and value >= 0:
-                totals[key] += value
+    totals = result_totals()
     recent = db.session.query(Assessment.id, Assessment.summary, Assessment.created_at).order_by(Assessment.id.desc()).limit(12).all()
     _, environment = settings()
     zones = db.session.query(Zone.zone_key, Zone.name, func.count(Asset.id)).outerjoin(Asset, (Asset.zone_id == Zone.id) & ~Asset.name.endswith(" interface")).group_by(Zone.id).order_by(Zone.id).limit(12).all()
@@ -84,24 +91,6 @@ def overview():
     zone_total = _count(db.session.query(func.count(Zone.id)))
     asset_total = _count(db.session.query(func.count(Asset.id)).filter(~Asset.name.endswith(" interface")))
 
-    result_totals = {
-        "total": 0,
-        "pass": 0,
-        "fail": 0,
-        "inconclusive": 0,
-    }
-
-    # Summaries are small, persisted assessment aggregates. The full report
-    # is deliberately not loaded for dashboard-wide totals.
-    for (summary,) in db.session.query(Assessment.summary).all():
-        if not isinstance(summary, dict):
-            continue
-
-        for key in result_totals:
-            value = summary.get(key, 0)
-            if isinstance(value, int) and not isinstance(value, bool) and value >= 0:
-                result_totals[key] += value
-
     recent_assessments = (
         db.session.query(Assessment)
         .order_by(Assessment.created_at.desc(), Assessment.id.desc())
@@ -135,7 +124,7 @@ def overview():
         assessment_total=assessment_total,
         zone_total=zone_total,
         asset_total=asset_total,
-        result_totals=result_totals,
+        result_totals=result_totals(),
         recent_assessments=recent_assessments,
         environment=settings()[1],
     )

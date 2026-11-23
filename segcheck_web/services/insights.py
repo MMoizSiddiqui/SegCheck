@@ -13,6 +13,7 @@ from datetime import datetime, timezone
 from segcheck_web.extensions import db
 from segcheck_web.models import Assessment, Policy, PolicyVersion
 from segcheck_web.models.jobs import AssessmentJob
+from segcheck_web.services.report_analysis import _evidence_by_check, _evidence_state
 
 RESULT_KEYS = ("pass", "fail", "inconclusive")
 MAX_REPORTS = 60
@@ -45,12 +46,40 @@ def _duration_ms(report):
         return None
 
 
+def outcome(result, evidence):
+    """One check's outcome in the report's own words ("pass", "fail" or "inconclusive").
+
+    Same rules as the report's rule cards: a block the firewall logged for every attempt
+    is passed (proven); a firewall-logged pass, or an approved flow that did not answer, is
+    failed; silence without that proof stays inconclusive ("No answer: not proven").
+    """
+    raw = str(result.get("result", "")).upper()
+    expected = result.get("expected")
+    state = _evidence_state((evidence or {}).get(result.get("check_id"), {}))
+    if raw == "FAIL":
+        return "fail"
+    if raw == "PASS":
+        return "pass"
+    if raw != "INCONCLUSIVE":
+        return None
+    if expected == "allow":
+        return "fail"
+    if expected == "deny" and state == "passed":
+        return "fail"
+    if expected == "deny" and state == "corroborated":
+        return "pass"
+    return "inconclusive"
+
+
 def assessment_breakdown(report):
     """Split one report into exercised outcomes and not-exercised checks."""
     evaluated, skipped = _scope(report)
     counts = {key: 0 for key in RESULT_KEYS}
     counts["not_exercised"] = 0
-    results = report.get("results", []) if isinstance(report, dict) else []
+    if not isinstance(report, dict):
+        return counts
+    evidence = _evidence_by_check(report)
+    results = report.get("results", [])
     for result in results if isinstance(results, list) else []:
         if not isinstance(result, dict):
             continue
@@ -58,7 +87,7 @@ def assessment_breakdown(report):
         if check_id in skipped or (evaluated is not None and check_id not in evaluated):
             counts["not_exercised"] += 1
             continue
-        key = str(result.get("result", "")).lower()
+        key = outcome(result, evidence)
         if key in RESULT_KEYS:
             counts[key] += 1
     return counts
@@ -99,6 +128,7 @@ def build_insights(environment, actor_id=None):
             "url": f"/assessments/{record.id}",
         })
         # Latest observation per exact check path (records are newest first).
+        evidence = _evidence_by_check(report)
         for result in report.get("results", []) if isinstance(report.get("results"), list) else []:
             if not isinstance(result, dict):
                 continue
@@ -120,7 +150,7 @@ def build_insights(environment, actor_id=None):
             if path_key in edge["_seen"]:
                 continue
             edge["_seen"].add(path_key)
-            key = str(result.get("result", "")).lower()
+            key = outcome(result, evidence)
             if key in RESULT_KEYS:
                 edge[key] += 1
             if roles.get(destination) == "cde":

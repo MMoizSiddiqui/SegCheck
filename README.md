@@ -7,10 +7,12 @@
 <p align="center">
   <img alt="Python 3.11+" src="https://img.shields.io/badge/python-3.11%2B-blue">
   <img alt="Flask" src="https://img.shields.io/badge/web-Flask-black">
-  <img alt="Tests" src="https://img.shields.io/badge/tests-607%20passing-brightgreen">
+  <img alt="Tests" src="https://img.shields.io/badge/tests-608%20passing-brightgreen">
   <img alt="Standards" src="https://img.shields.io/badge/standards-PCI%20DSS%20%7C%20NIST%20%7C%20ISO%20%7C%20CIS-informational">
   <img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-green">
 </p>
+
+<p align="center"><img src="docs/screenshots/overview.png" alt="SegCheck overview: 10 audits, latest PASSED, 91% of 170 checks passed, results across runs" width="900"></p>
 
 SegCheck answers questions like *"can a PC in HR reach the card database?"* You run it **on a PC inside the
 department you are testing**. It sends small, harmless connection attempts (TCP, UDP, ping) toward the
@@ -27,6 +29,7 @@ the run against **PCI DSS, NIST SP 800-53, ISO/IEC 27002 and CIS v8**, control b
 
 - [Why SegCheck](#why-segcheck)
 - [How it works](#how-it-works)
+- [A tour: find the hole, fix it, prove it](#a-tour-find-the-hole-fix-it-prove-it)
 - [Quick start](#quick-start)
 - [Try it on a whole fake company (Docker lab)](#try-it-on-a-whole-fake-company-docker-lab)
 - [The four steps of an audit](#the-four-steps-of-an-audit)
@@ -74,13 +77,63 @@ flowchart LR
 3. **Explain:** the decisive firewall rule is named from the rule export or the log's rule label.
 4. **Judge:** results are mapped to the controls of every chosen standard. The worst result for a control wins.
 
+## A tour: find the hole, fix it, prove it
+
+Every screenshot below is from a real run in the [Docker lab](#try-it-on-a-whole-fake-company-docker-lab): a
+staff PC (10.40.0.100) is tested against the card-data network, behind a real Linux firewall that has one
+forgotten rule.
+
+**1 · Set up the audit.** Four guided steps. Step 3 connects the firewall's logs (the status turns green when
+they arrive) and can load its rule export; Step 4 picks the standard and shows exactly what will be sent.
+
+<p align="center"><img src="docs/screenshots/step3-firewall.png" alt="Step 3: Linux firewall chosen, logs arriving, setup instructions for the firewall's administrator, 9 firewall rules loaded" width="900"></p>
+
+**2 · Watch it run.** Each attempt appears live. Here 23 of 50 are done and every one is already *blocked, in
+the firewall's log*: proof, not just silence.
+
+<p align="center"><img src="docs/screenshots/live-run.png" alt="Live run at 23 of 50 connections, 23 blocked and proven by the firewall log" width="900"></p>
+
+**3 · The verdict.** One rule failed: something that must be blocked answered.
+
+<p align="center"><img src="docs/screenshots/report-failed.png" alt="Report: FAILED, 1 rule broken, 12 rules tested, 11 passed, 1 failed" width="900"></p>
+
+**4 · Exactly what failed, and which firewall rule did it.** TCP 5432 on the card database connected; the
+firewall's own log says it *let it through*, and the rule export names the culprit:
+`legacy-reporting (FORWARD rule 7)`. The card also says what to do.
+
+<p align="center"><img src="docs/screenshots/rule-failed.png" alt="Failed rule card: TCP 5432 connected, firewall let it through, rule legacy-reporting FORWARD rule 7" width="900"></p>
+
+**5 · What it means for each standard.** The offline compliance assistant judges every control of every
+chosen standard, with the fix, an acceptable alternative and the evidence an assessor expects.
+
+<p align="center"><img src="docs/screenshots/verdict-per-standard.png" alt="Verdict per standard: PCI DSS 4.0.1 1.3.1 and 11.4.5 not met on 10.30.0.20 TCP 5432" width="900"></p>
+
+**6 · Fix it, run again, and prove the fix.** After the rule is removed, the same audit passes: blocked, and
+proven by the firewall's log. *Compare two audits* shows it as **FIXED**, with nothing worse.
+
+<p align="center"><img src="docs/screenshots/report-passed.png" alt="Report after the fix: PASSED, blocked and proven, 12 of 12 passed" width="900"></p>
+
+<p align="center"><img src="docs/screenshots/compare-fixed.png" alt="Compare two audits: FIXED, 1 finding fixed, nothing got worse" width="900"></p>
+
+<details>
+<summary><b>More screenshots</b>: map of a run, dashboard charts, Step 4, New audit, History</summary>
+<br>
+
+| | |
+|---|---|
+| <img src="docs/screenshots/map-run.png" alt="Map of a run: this PC to the card systems, one open path on TCP 5432" width="440"> | <img src="docs/screenshots/dashboard-charts.png" alt="Dashboard: pass rate gauge, results across runs, segmentation map" width="440"> |
+| <img src="docs/screenshots/step4-checks.png" alt="Step 4: choose one standard or several, with what each tests" width="440"> | <img src="docs/screenshots/new-audit.png" alt="New audit page: four steps, Step 1 done" width="440"> |
+| <img src="docs/screenshots/history.png" alt="History: every audit with its verdict, PDF and evidence bundle" width="440"> | |
+
+</details>
+
 ## Quick start
 
 **Requirements:** Windows 10/11 (the launcher) or any OS with **Python 3.11+**. Internet is needed once, for
 the first install of the Python packages.
 
 ```powershell
-git clone <this repository's URL> SegCheck
+git clone https://github.com/MMoizSiddiqui/SegCheck.git
 ```
 
 Then **double-click `SegCheck.exe`** in the folder (or download the ZIP from GitHub, *Extract All…*, and
@@ -205,7 +258,7 @@ tests/                  automated test suite (tests/fixtures = test data)
 python -m pytest -q
 ```
 
-The regression suite has **607 passed** on Windows (17 Linux-only tests skipped) and **624 passed** on Linux,
+The regression suite has **608 passed** on Windows (17 Linux-only tests skipped) and **625 passed** on Linux,
 run inside the lab's auditor container as a non-root user.
 
 ```powershell

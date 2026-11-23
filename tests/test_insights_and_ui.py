@@ -27,6 +27,26 @@ def test_breakdown_separates_not_exercised_checks():
     assert assessment_breakdown(report) == {"pass": 1, "fail": 1, "inconclusive": 1, "not_exercised": 1}
 
 
+def test_breakdown_counts_checks_the_way_the_report_does():
+    """A block proven by the firewall log is passed; a logged pass or a silent approved flow is failed."""
+    report = {
+        "results": [
+            {"check_id": "proven", "result": "INCONCLUSIVE", "expected": "deny"},
+            {"check_id": "logged-pass", "result": "INCONCLUSIVE", "expected": "deny"},
+            {"check_id": "partial", "result": "INCONCLUSIVE", "expected": "deny"},
+            {"check_id": "no-logs", "result": "INCONCLUSIVE", "expected": "deny"},
+            {"check_id": "approved-down", "result": "INCONCLUSIVE", "expected": "allow"},
+            {"check_id": "open", "result": "FAIL", "expected": "deny"},
+        ],
+        "boundary_evidence": {"attempts": [
+            {"check_id": "proven", "evidence": "logged_block"}, {"check_id": "proven", "evidence": "logged_block"},
+            {"check_id": "logged-pass", "evidence": "logged_pass"},
+            {"check_id": "partial", "evidence": "logged_block"}, {"check_id": "partial", "evidence": "no_log"},
+        ]},
+    }
+    assert assessment_breakdown(report) == {"pass": 1, "fail": 3, "inconclusive": 2, "not_exercised": 0}
+
+
 @pytest.mark.parametrize("report", [
     {},
     {"results": "not-a-list"},

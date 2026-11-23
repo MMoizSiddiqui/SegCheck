@@ -102,13 +102,13 @@
                     <p class="muted small">Complete an authorised assessment to measure posture.</p>
                 </div>
             </div>
-            <p class="panel-note">INCONCLUSIVE never counts as passing. Checks a run could not exercise (other source zones) are shown separately and are not coverage.</p>
+            <p class="panel-note">Passed means blocked and proven by the firewall's log, or an approved service that works. No answer without that proof never counts as passed. Checks a run could not exercise (other source zones) are shown separately and are not coverage.</p>
         </article>
 
         <article class="viz-card span-7" aria-labelledby="history-title">
             <div class="viz-head"><div><span class="section-kicker">RECENT EXECUTION HISTORY</span><h2 id="history-title">Results across runs</h2></div><span class="panel-caption">Latest 12 saved assessments · hover for detail</span></div>
             <svg id="assessment-trend" viewBox="0 0 660 250" role="img" aria-label="Saved result counts by assessment"><text x="30" y="120" class="chart-empty">Complete an assessment to populate this chart.</text></svg>
-            <div class="topo-legend"><span><i class="l-pass"></i>Pass</span><span><i class="l-fail"></i>Fail</span><span><i class="l-inc"></i>Inconclusive</span><span><i class="l-planned"></i>Not exercised</span></div>
+            <div class="topo-legend"><span><i class="l-pass"></i>Pass</span><span><i class="l-fail"></i>Fail</span><span><i class="l-inc"></i>No answer</span><span><i class="l-planned"></i>Not exercised</span></div>
         </article>
 
         <article class="viz-card span-12 topology-panel" aria-labelledby="topology-title">
@@ -156,7 +156,7 @@
             {% for key, label in [
                 ('pass', 'Pass'),
                 ('fail', 'Fail'),
-                ('inconclusive', 'Inconclusive')
+                ('inconclusive', 'No answer')
             ] %}
                 {% set value = result_totals[key] %}
                 {% set percentage = ((value * 100 / result_count)|round(1)) if result_count else 0 %}

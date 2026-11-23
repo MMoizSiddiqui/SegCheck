@@ -7,7 +7,7 @@
   const svg = (...args) => UI.svg(...args);
   const el = (...args) => UI.el(...args);
   const KEYS = ["pass", "fail", "inconclusive", "not_exercised"];
-  const LABEL = { pass: "Pass", fail: "Fail", inconclusive: "Inconclusive", not_exercised: "Not exercised" };
+  const LABEL = { pass: "Pass", fail: "Fail", inconclusive: "No answer", not_exercised: "Not exercised" };
   const signatures = {};
   const tooltip = document.querySelector("#viz-tooltip");
   /* Run after layout; falls back to a timer because rAF pauses in hidden tabs. */
@@ -132,7 +132,7 @@
         y -= height;
       }
       const when = run.created_at ? new Date(run.created_at).toLocaleString() : "";
-      tip(group, `#${run.id} · ${run.policy}\n${run.source_zone} · ${when}\nPass ${run.breakdown.pass} · Fail ${run.breakdown.fail} · Inconclusive ${run.breakdown.inconclusive} · Not exercised ${run.breakdown.not_exercised}${run.duration_ms != null ? ` · ${run.duration_ms} ms` : ""}`);
+      tip(group, `#${run.id} · ${run.policy}\n${run.source_zone} · ${when}\nPass ${run.breakdown.pass} · Fail ${run.breakdown.fail} · No answer ${run.breakdown.inconclusive} · Not exercised ${run.breakdown.not_exercised}${run.duration_ms != null ? ` · ${run.duration_ms} ms` : ""}`);
       chart.append(group);
       chart.append(svg("text", { x: x + barWidth / 2, y: bottom + 20, "text-anchor": "middle", class: "axis-text" }, `#${run.id}`));
     });
