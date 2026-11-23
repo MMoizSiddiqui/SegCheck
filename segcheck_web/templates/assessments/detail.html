@@ -57,6 +57,16 @@
             </div>
         </section>
 
+        {% if view.problems %}
+        <section class="run-problems" aria-label="Problems in this run">
+            <h2>{{ 'Problems in this run: fix and run again' if view.problems|selectattr('tone', 'equalto', 'fix')|list else 'Notes about this run' }}</h2>
+            <ul>
+                {% for p in view.problems %}<li class="tone-{{ p.tone }}"><strong>{{ p.title }}.</strong> {{ p.text }}
+                    {% if p.fix %}<br><span class="problem-fix">What to do: {{ p.fix }}</span>{% endif %}</li>{% endfor %}
+            </ul>
+        </section>
+        {% endif %}
+        {% if previous %}<p class="compare-link"><a class="ghost-button small-button" href="{{ url_for('assessments.compare_assessments', a=previous.id, b=record.id) }}">Compare with the previous audit from this network (#{{ previous.id }}): what was fixed, what got worse</a></p>{% endif %}
         <section class="setup-card rules-card">
             <div class="section-heading"><h2>Rule by rule</h2><span class="panel-caption">What you asked · what was sent · what happened · result</span></div>
             <details class="explain"><summary>How to read this table</summary>
@@ -90,15 +100,78 @@
                 {% if rule.reason %}<p class="rule-reason-text"><strong>Rule reason:</strong> {{ rule.reason }}</p>{% endif %}
                 <p class="rule-why"><strong>Why:</strong> {{ rule.why }}</p>
                 {% if rule.fix %}<p class="rule-fix"><strong>What to do:</strong> {{ rule.fix }}</p>{% endif %}
+                {% if rule.cause %}<p class="rule-cause {{ 'is-block' if rule.cause.blocking }}"><strong>{{ rule.cause.title }}:</strong>
+                    <span class="mono">{{ rule.cause.rule }}</span> <small>({{ rule.cause.source }})</small>
+                    {% if rule.cause.detail %}<br><small class="mono">{{ rule.cause.detail }}</small>{% endif %}
+                    {% if rule.cause.uncertain %}<br><small>Some rules above it use aliases SegCheck could not resolve; check them too.</small>{% endif %}
+                    {% if rule.cause.fix and rule.outcome in ['fail', 'open'] %}<br><small>{{ rule.cause.fix }}</small>{% endif %}</p>{% endif %}
                 <details><summary>Every attempt explained</summary>
                     <ul class="attempt-explain">
-                    {% for a in rule.attempts %}<li><b class="mono">{{ 'ping' if a.protocol == 'icmp' else a.protocol|upper ~ ' ' ~ a.port }}</b> · {{ a.label }}{% if a.ms is not none %} · {{ a.ms }} ms{% endif %} — {{ a.text }}{% if a.firewall == 'logged_block' %} The firewall logged that it blocked this attempt.{% elif a.firewall == 'logged_pass' %} The firewall logged that it let this attempt through.{% endif %}</li>{% endfor %}
+                    {% for a in rule.attempts %}<li><b class="mono">{{ 'ping' if a.protocol == 'icmp' else a.protocol|upper ~ ' ' ~ a.port }}</b> · {{ a.label }}{% if a.ms is not none %} · {{ a.ms }} ms{% endif %} — {{ a.text }}{% if a.firewall == 'logged_block' and 'log shows it' not in a.text %} The firewall logged that it blocked this attempt.{% elif a.firewall == 'logged_pass' %} The firewall logged that it let this attempt through.{% endif %}</li>{% endfor %}
                     </ul>
                 </details>
             </article>
             {% endfor %}
             </div>
         </section>
+
+        {% set judged = assistant.standards|rejectattr('verdict', 'equalto', 'not_tested')|list %}
+        {% if judged %}
+        <section class="setup-card assistant-card">
+            <div class="section-heading"><h2>Verdict per standard</h2><span class="panel-caption">Compliance assistant (offline RAG) · judged against {{ assistant.scope }}</span></div>
+            <p class="assistant-conclusion">{{ assistant.conclusion }}</p>
+            <div class="standard-grid">
+            {% for std in judged %}
+                <details class="standard-verdict tone-{{ std.tone }}" {% if std.verdict == 'not_met' %}open{% endif %}>
+                    <summary><span class="standard-name">{{ std.name }}</span><span class="chip chip-{{ 'fail' if std.tone == 'fail' else ('pass' if std.tone == 'pass' else 'inconclusive') }}">{{ std.label }}</span>
+                        <small>{{ std.not_met }} of {{ std.tested }} tested control(s) not met</small></summary>
+                    <ul class="control-list">
+                    {% for c in std.controls %}
+                        <li class="control-row tone-{{ c.tone }}">
+                            <div class="control-head"><span class="mono">{{ c.id }}</span> <strong>{{ c.title }}</strong> <span class="control-label">{{ c.label }}</span></div>
+                            {% if c.verdict != 'not_tested' %}
+                            <p class="small">{{ c.summary }}</p>
+                            <p class="small">Based on {{ c.checks }} tested rule(s) · {{ c.basis|join(', ') }}.</p>
+                            {% if c.failing %}<p class="small"><strong>Failed on:</strong> <span class="mono">{{ c.failing|join(' · ') }}</span></p>{% endif %}
+                            {% if c.broken %}<p class="small"><strong>Approved flow not working:</strong> <span class="mono">{{ c.broken|join(' · ') }}</span></p>{% endif %}
+                            {% if c.fix %}<p class="small"><strong>Fix:</strong> {{ c.fix }}</p>{% endif %}
+                            {% for text in c.playbooks %}<p class="small playbook">{{ text }}</p>{% endfor %}
+                            {% if c.alternative %}<p class="small"><strong>Alternative:</strong> {{ c.alternative }}</p>{% endif %}
+                            <p class="small muted-line"><strong>Evidence an assessor expects:</strong> {{ c.evidence }}</p>
+                            {% else %}<p class="small muted-line">No rule in this run falls under this control.</p>{% endif %}
+                        </li>
+                    {% endfor %}
+                    </ul>
+                    <p class="small"><a class="text-link" href="{{ std.source }}" rel="noopener noreferrer" target="_blank">Official {{ std.name }} documents</a></p>
+                </details>
+            {% endfor %}
+            </div>
+            <div class="rag-explain">
+                <h3>How the RAG assistant calculated this</h3>
+                <ol class="small">
+                    <li><strong>Knowledge base</strong> (version {{ assistant.kb_version }}): SegCheck's own plain-language summaries of each
+                        standard control and fix playbooks per kind of service, stored on this PC.</li>
+                    <li><strong>Finding text:</strong> each of the {{ assistant.notes|length }} tested rule(s) is turned into a short text
+                        (must be blocked or must work, what happened, protocol, ports, the type of source and destination network).</li>
+                    <li><strong>Retrieval:</strong> that text is compared with every knowledge entry using TF-IDF word weights and cosine
+                        similarity (0 = unrelated, 1 = identical wording). A control is attached to the rule if the standard mapped it
+                        explicitly, or if it is relevant (score above 0) and applies to that kind of path.</li>
+                    <li><strong>Verdict:</strong> each control takes the worst result of its rules (Not met, Attention, Met but not proven,
+                        Met and proven); each standard takes the worst of its controls. The verdict comes only from the measured results;
+                        the retrieved text only explains it (fix, playbook, alternative, evidence expected).</li>
+                </ol>
+                <p class="small muted">{{ assistant.disclaimer }} No AI model or internet is used, so the same report always gives the same
+                    answer. The analyst reviews it and decides; the measured results above remain the evidence.</p>
+                <details class="howto small">
+                    <summary>Show what was retrieved for each rule, with similarity scores</summary>
+                    <div class="table-wrapper"><table class="data-table"><thead><tr><th>Rule</th><th>Finding text compared</th><th>Best matching knowledge (score)</th></tr></thead><tbody>
+                    {% for note in assistant.notes %}<tr><td class="mono">{{ note.check_id }}</td><td class="small mono">{{ note.query }}</td>
+                        <td class="small">{% for score, kind, doc in note.top %}{{ doc }} <span class="muted">({{ kind }}, {{ score }})</span>{{ '' if loop.last }}<br>{% endfor %}</td></tr>{% endfor %}
+                    </tbody></table></div>
+                </details>
+            </div>
+        </section>
+        {% endif %}
 
         <section class="setup-card">
             <div class="section-heading"><h2>Map of this run</h2><span class="panel-caption">Click a host for its rules · Replay shows the attempts in order</span></div>
@@ -109,7 +182,7 @@
 
         {% set an = analysis %}
         <section class="setup-card exec-summary status-{{ an.status }}">
-            <div class="section-heading"><h2>Summary and what to fix</h2><span class="chip {{ {'violation': 'chip-fail', 'enforced': 'chip-pass'}.get(an.status, 'chip-inconclusive') }}">{{ {'violation': 'Action required', 'enforced': 'Deny enforced', 'unproven': 'Evidence needed'}[an.status] }}</span></div>
+            <div class="section-heading"><h2>Summary and what to fix</h2><span class="chip {{ {'violation': 'chip-fail', 'attention': 'chip-fail', 'enforced': 'chip-pass'}.get(an.status, 'chip-inconclusive') }}">{{ {'violation': 'Action required', 'attention': 'Action required', 'enforced': 'Deny enforced', 'unproven': 'Evidence needed'}.get(an.status, 'Evidence needed') }}</span></div>
             <p class="exec-headline">{{ an.headline }}</p>
             <p>{{ an.meaning }}</p>
             <div class="verdict-tiles">
@@ -138,7 +211,7 @@
         {% if an.controls %}
         <section class="setup-card">
             <div class="section-heading"><h2>Control matrix</h2><span class="panel-caption">Supporting technical evidence per mapped control</span></div>
-            <div class="table-wrapper"><table class="data-table"><thead><tr><th>Framework</th><th>Control</th><th>Checks</th><th>Fail</th><th>Pass</th><th>Inconclusive</th><th>Block corroborated</th><th>Not exercised</th><th>Reading</th></tr></thead><tbody>
+            <div class="table-wrapper"><table class="data-table"><thead><tr><th>Framework</th><th>Control</th><th>Checks</th><th>Fail</th><th>Pass</th><th>No answer</th><th>…of which blocked in the firewall log</th><th>Not exercised</th><th>Reading</th></tr></thead><tbody>
             {% for c in an.controls %}<tr><td>{{ c.framework }}</td><td><strong>{{ c.control_id }}</strong><br><span class="small muted">{{ c.title }}</span></td><td>{{ c.checks }}</td><td class="{{ 'cell-fail' if c.FAIL }}">{{ c.FAIL }}</td><td>{{ c.PASS }}</td><td>{{ c.INCONCLUSIVE }}</td><td class="{{ 'cell-pass' if c.corroborated }}">{{ c.corroborated }}</td><td>{{ c['NOT EXERCISED'] }}</td>
                 <td class="small">{% if c.FAIL %}<span class="chip chip-fail">Gap found</span>{% elif c.checks and c.corroborated == c.checks - c['NOT EXERCISED'] and c.corroborated %}<span class="chip chip-pass">Supported</span>{% else %}<span class="chip chip-inconclusive">Needs evidence</span>{% endif %}</td></tr>{% endfor %}
             </tbody></table></div>
@@ -186,7 +259,7 @@
         </div>
 
         {% set legacy_evidence = assessment_metadata.get('evidence_summary', {}) %}
-        {% if legacy_evidence and legacy_evidence.get('total') %}
+        {% if legacy_evidence and legacy_evidence.get('total') and legacy_evidence.get('not_evaluated', 0) < legacy_evidence.get('total') %}
         <section class="setup-card">
             <div class="section-heading">
                 <h2>Firewall evidence</h2>
@@ -211,7 +284,7 @@
         {% if boundary is mapping %}{% set bsum = boundary.get('summary', {}) %}
         <section class="setup-card">
             <div class="section-heading"><h2>Boundary cross-check (firewall logs)</h2><span class="row">{% for device in boundary.get('devices', []) %}<span class="chip {{ 'chip-pass' if device.connected else 'chip-idle' }}">{{ device.name }} · {{ 'connected' if device.connected else 'no log feed' }}</span>{% else %}<span class="chip chip-idle">no boundary on tested paths</span>{% endfor %}</span></div>
-            <p class="small muted">{{ boundary.get('note') }}</p>
+            <p class="small muted">Each attempt matched with the firewall's own log: a logged block proves a silent attempt was blocked; a logged pass reveals a hole. (Syslog over UDP is unauthenticated; SegCheck accepts it only from the expected firewall address on its own port.)</p>
             <div class="verdict-tiles">
                 <div class="verdict-tile t-pass"><span>Block confirmed</span><strong>{{ bsum.get('logged_block', 0) }}</strong></div>
                 <div class="verdict-tile t-fail"><span>Passed firewall</span><strong>{{ bsum.get('logged_pass', 0) }}</strong></div>
@@ -220,8 +293,8 @@
             </div>
             {% if bsum.get('contradictions') or bsum.get('open_at_boundary') %}<p class="scope-banner">⚠ {{ bsum.get('contradictions', 0) }} contradiction(s) and {{ bsum.get('open_at_boundary', 0) }} attempt(s) that the firewall let through even though the target did not answer. Review those rows: the boundary is not enforcing the deny.</p>{% endif %}
             <details><summary>Per-attempt evidence ({{ boundary.get('attempts', [])|length }})</summary>
-            <div class="table-wrapper"><table class="data-table"><thead><tr><th>Check</th><th>Probe</th><th>Observed</th><th>Firewall</th><th>What it means</th></tr></thead><tbody>
-            {% for row in boundary.get('attempts', []) %}<tr><td class="mono">{{ row.check_id }}</td><td class="mono">{{ row.host }}{% if row.protocol != 'icmp' %}:{{ row.port }}{% endif %} <span class="chip proto-{{ row.protocol }}">{{ row.protocol|upper }}</span></td><td><span class="chip chip-{{ row.observed }}">{{ row.observed }}</span></td><td><span class="chip {{ {'logged_block': 'chip-pass', 'logged_pass': 'chip-fail', 'no_matching_log': 'chip-inconclusive'}.get(row.evidence, 'chip-idle') }}">{{ row.evidence|replace('_', ' ') }}</span></td><td class="small">{{ row.interpretation }}</td></tr>{% endfor %}
+            <div class="table-wrapper"><table class="data-table"><thead><tr><th>Check</th><th>Attempt</th><th>What came back</th><th>Firewall log</th><th>What it means</th></tr></thead><tbody>
+            {% for row in boundary.get('attempts', []) %}<tr><td class="mono">{{ row.check_id }}</td><td class="mono">{{ row.host }}{% if row.protocol != 'icmp' %}:{{ row.port }}{% endif %} <span class="chip proto-{{ row.protocol }}">{{ row.protocol|upper }}</span></td><td><span class="chip chip-{{ row.observed }}">{{ {'reachable': 'answered', 'inconclusive': 'no answer'}.get(row.observed, row.observed) }}</span></td><td><span class="chip {{ {'logged_block': 'chip-pass', 'logged_pass': 'chip-fail', 'no_matching_log': 'chip-inconclusive'}.get(row.evidence, 'chip-idle') }}">{{ {'logged_block': 'blocked (in its log)', 'logged_pass': 'let through (in its log)', 'no_matching_log': 'no log line', 'not_connected': 'no log feed', 'same_zone': 'no firewall in between'}.get(row.evidence, row.evidence|replace('_', ' ')) }}</span></td><td class="small">{{ row.interpretation }}</td></tr>{% endfor %}
             </tbody></table></div></details>
         </section>
         {% endif %}
@@ -231,6 +304,10 @@
                 <h2>Technical detail per check</h2>
                 <span class="row"><span>{{ results|length }} recorded results</span><input class="field-input" type="search" placeholder="Filter checks…" aria-label="Filter check results" data-filter-cards="#result-list"></span>
             </div>
+            <p class="small muted">The same rules as above, with every technical detail. The coloured verdict combines what the probe saw
+                with the firewall's logs (a probe alone can never prove a block,
+                so silence counts as proven only when the firewall log shows the block).</p>
+            {% set plain_by_check = {} %}{% for r in view.rules %}{% set _ = plain_by_check.update({r.check_id: r}) %}{% endfor %}
             <div id="result-list">
             {% for result in results %}
                 {% set skipped = result.get('check_id') in not_run %}
@@ -240,7 +317,9 @@
                         <span class="eyebrow">{{ result.get('check_id', 'Check') }}</span>
                         <span class="spacer"></span>
                         {% if skipped %}<span class="chip chip-not_exercised">NOT EXERCISED</span>{% endif %}
-                        <strong class="assessment-result chip chip-{{ verdict }}">{{ result.get('result', 'UNKNOWN') }}</strong>
+                        {% set plain = plain_by_check.get(result.get('check_id')) %}
+                        {% if plain %}<strong class="assessment-result chip tone-chip tone-{{ plain.tone }}">{{ plain.outcome_label }}</strong>
+                        {% else %}<strong class="assessment-result chip chip-{{ verdict }}">{{ result.get('result', 'UNKNOWN') }}</strong>{% endif %}
                     </div>
                     <h3>{{ result.get('check_name', 'Unnamed check') }}</h3>
                     <div class="path">
@@ -249,12 +328,15 @@
                         <span>{{ result.get('destination_host', '—') }}</span>
                         <span class="chip proto-{{ result.get('protocol') }}">{{ 'ICMP echo' if result.get('protocol') == 'icmp' else result.get('protocol', '—')|upper ~ ' / ' ~ result.get('ports', [])|join(', ') }}</span>
                         <span class="chip {{ 'chip-fail' if result.get('expected') == 'deny' else 'chip-pass' }}">EXPECT {{ result.get('expected', '—')|upper }}</span>
-                        <span class="chip chip-idle">OBSERVED {{ result.get('observed', '—')|upper }}</span>
+                        <span class="chip chip-idle">SAW: {{ {'reachable': 'IT ANSWERED', 'inconclusive': 'NO ANSWER'}.get(result.get('observed'), result.get('observed', '—')|upper) }}</span>
                     </div>
-                    {% if result.get('explanation') %}<p>{{ result.get('explanation') }}</p>{% endif %}
+                    {% if plain %}<p><strong>Why:</strong> {{ plain.why }}</p>
+                    {% if plain.fix %}<p><strong>What to do:</strong> {{ plain.fix }}</p>{% endif %}
+                    {% if plain.tone == 'unproven' %}<p class="small muted">Not proven: nothing answered, but no firewall log line shows the block, so SegCheck cannot tell a block from a switched-off service.</p>{% endif %}
+                    {% elif result.get('explanation') %}<p>{{ result.get('explanation') }}</p>{% endif %}
                     {% if info %}<div class="guidance finding-guidance"><strong>Analyst guidance{% if info.method_label %} · {{ info.method_label }}{% endif %}{% if info.evidence not in ['none', 'same_zone'] %} · firewall: {{ info.evidence|replace('_', ' ') }}{% endif %}</strong><ul>{% for line in info.guidance %}<li>{{ line }}</li>{% endfor %}</ul></div>{% endif %}
-                    {% if result.get('recommended_action') %}<p class="small muted"><strong>Next action (saved with report):</strong> {{ result.recommended_action }}</p>{% endif %}
-                    {% if result.get('framework_mappings') %}<p class="row small">{% for mapping in result.framework_mappings %}<span class="chip chip-violet">{{ mapping.get('framework') }} {{ mapping.get('version') }} · {{ mapping.get('control_id') }} · {{ mapping.get('relationship') }}</span>{% endfor %}</p>{% endif %}
+                    {% if result.get('recommended_action') and not plain %}<p class="small muted"><strong>Next action (saved with report):</strong> {{ result.recommended_action }}</p>{% endif %}
+                    {% if result.get('framework_mappings') %}<p class="row small"><span class="muted">Supports these standard controls:</span>{% for mapping in result.framework_mappings %}<span class="chip chip-violet">{{ mapping.get('framework') }} {{ mapping.get('version') }} · {{ mapping.get('control_id') }} · {{ mapping.get('relationship') }}</span>{% endfor %}</p>{% endif %}
                     <details>
                         <summary>Observations, rationale and firewall evidence</summary>
                         {% if result.get('rationale') %}<p><strong>Policy rationale:</strong> {{ result.get('rationale') }}</p>{% endif %}
@@ -264,9 +346,9 @@
                         {% for item in observations %}{% set plain = explain(item.get('reason', ''), item.get('protocol', '')) %}<tr><td class="mono">{{ item.get('port') }}</td><td><span class="chip chip-{{ item.get('observed') }}">{{ plain.label }}</span></td><td class="small">{{ plain.text }}<br><span class="mono muted">{{ item.get('reason') }}</span></td><td class="mono">{{ item.get('duration_ms') }} ms</td><td class="mono">{{ item.get('source_ip', '—') }}</td></tr>{% endfor %}
                         </tbody></table></div>
                         {% endif %}
-                        <h4>Per-port firewall evidence</h4>
                         {% set port_evidence = result.get('firewall_evidence', []) %}
-                        {% if port_evidence %}
+                        {% if port_evidence and port_evidence|rejectattr('status', 'equalto', 'not_evaluated')|list %}
+                        <h4>Per-port firewall evidence (pfSense log file)</h4>
                             <div class="table-wrapper">
                                 <table class="data-table">
                                     <thead><tr><th>Port</th><th>Status</th><th>Reason</th><th>Matched events</th></tr></thead>
@@ -282,8 +364,6 @@
                                     </tbody>
                                 </table>
                             </div>
-                        {% else %}
-                            <p>No per-port firewall evidence was recorded.</p>
                         {% endif %}
                     </details>
                 </article>

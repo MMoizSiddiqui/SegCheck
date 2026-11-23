@@ -1,0 +1,131 @@
+{
+  "version": "2026-11-22",
+  "note": "SegCheck's own summaries for explanation only. Read the official documents for exact requirement wording. These passages never decide PASS/FAIL.",
+  "frameworks": {
+    "pci_dss": {"name": "PCI DSS 4.0.1", "source": "https://www.pcisecuritystandards.org/document_library/"},
+    "nist_sp800_53": {"name": "NIST SP 800-53 Rev. 5", "source": "https://csrc.nist.gov/pubs/sp/800/53/r5/upd1/final"},
+    "iso27002": {"name": "ISO/IEC 27002:2022", "source": "https://www.iso.org/standard/75652.html"},
+    "cis_controls": {"name": "CIS Controls v8", "source": "https://www.cisecurity.org/controls/v8"}
+  },
+  "controls": [
+    {
+      "framework": "pci_dss", "control_id": "1.3.1", "title": "Inbound traffic to the CDE is restricted",
+      "applies": {"dest_roles": ["cde"], "expected": ["deny", "allow"]},
+      "summary": "Only traffic that the business needs may enter the cardholder data environment; everything else must be denied. A connection from an out-of-scope network that reaches a CDE service shows inbound traffic is not restricted.",
+      "evidence": "A list of approved inbound flows with a business reason, firewall rules that match it, and tests showing other inbound paths are blocked.",
+      "fix": "Remove or narrow the rule that admits this traffic into the CDE so only the approved source, destination and port remain; keep an explicit deny-and-log rule below it.",
+      "alternative": "If this flow is a genuine business need, document it as approved (source host, destination host, port, owner, reason), restrict it to that single source host, and log it. It then becomes an allowed flow to verify, not a violation.",
+      "keywords": "inbound cde cardholder data environment restrict deny ingress card database payment"
+    },
+    {
+      "framework": "pci_dss", "control_id": "1.3.2", "title": "Outbound traffic from the CDE is restricted",
+      "applies": {"source_roles": ["cde"], "expected": ["deny", "allow"]},
+      "summary": "Systems in the CDE may only start connections that the business needs. Open egress lets malware send card data out.",
+      "evidence": "Approved outbound flows from the CDE and tests from inside the CDE showing other destinations are blocked.",
+      "fix": "Add egress rules on the CDE interface that allow only the approved destinations and ports, then deny and log the rest.",
+      "alternative": "Route required CDE egress through a monitored proxy that allows only approved destinations.",
+      "keywords": "outbound egress cde exfiltration malware restrict"
+    },
+    {
+      "framework": "pci_dss", "control_id": "1.4.2", "title": "Inbound traffic from untrusted networks is restricted",
+      "applies": {"source_roles": ["guest", "dmz", "untrusted"], "expected": ["deny", "allow"]},
+      "summary": "Traffic from untrusted networks (guest Wi-Fi, internet, partners, the DMZ) may only reach systems that are meant to be public, and never trusted internal or CDE systems.",
+      "evidence": "Rules between untrusted networks and internal networks, and tests from the untrusted side.",
+      "fix": "Block the untrusted network from this destination at the boundary, and allow only the specific public services that are meant for it.",
+      "alternative": "Put the service the untrusted side needs behind a DMZ proxy or application gateway instead of exposing the internal system.",
+      "keywords": "untrusted guest wifi dmz internet partner inbound public"
+    },
+    {
+      "framework": "pci_dss", "control_id": "11.4.5", "title": "Segmentation controls are tested",
+      "applies": {"dest_roles": ["cde"], "source_roles": ["cde"], "expected": ["deny"]},
+      "summary": "If segmentation is used to reduce PCI scope, it must be tested (at least yearly, and after changes; every six months for service providers) from every out-of-scope network, to show out-of-scope systems cannot reach the CDE.",
+      "evidence": "A dated test from each out-of-scope network with its method, targets and results, kept as evidence. This SegCheck report and its evidence bundle are that record.",
+      "fix": "Fix every failed path, then repeat the test from the same network and keep both reports (finding and retest).",
+      "alternative": "If a path cannot be closed, the systems that can reach the CDE are in PCI scope and must meet all applicable PCI DSS requirements.",
+      "keywords": "segmentation testing scope out-of-scope penetration annual retest evidence cde"
+    },
+    {
+      "framework": "nist_sp800_53", "control_id": "SC-7", "title": "Boundary protection",
+      "applies": {"expected": ["deny", "allow"], "any_boundary": true},
+      "summary": "Communication at the boundaries between network zones is monitored and controlled through managed interfaces such as firewalls.",
+      "evidence": "Boundary devices with rules per zone pair, their logs, and tests across each boundary.",
+      "fix": "Make the boundary rule for this zone pair explicit: allow only listed flows, deny and log the rest.",
+      "alternative": "Where a firewall is not possible, use host firewalls or private VLANs with access lists as the managed interface.",
+      "keywords": "boundary protection managed interface firewall zone monitor control"
+    },
+    {
+      "framework": "nist_sp800_53", "control_id": "SC-7(5)", "title": "Deny by default, allow by exception",
+      "applies": {"dest_roles": ["cde", "server", "hr"], "expected": ["deny"]},
+      "summary": "Boundary devices deny all traffic by default and allow only flows that have been explicitly approved.",
+      "evidence": "A final deny rule on the boundary and an approved-exception list that matches the allow rules.",
+      "fix": "Find the allow rule that permits this traffic; if it is not on the approved list, remove it. Make sure the last rule denies and logs.",
+      "alternative": "If the traffic is a needed exception, add it to the approved list with an owner and review date, scoped to exact hosts and ports.",
+      "keywords": "deny by default allow by exception whitelist least privilege sensitive"
+    },
+    {
+      "framework": "nist_sp800_53", "control_id": "AC-4", "title": "Information flow enforcement",
+      "applies": {"expected": ["deny", "allow"], "any_boundary": true},
+      "summary": "The system enforces approved paths for information to flow between zones, based on policy.",
+      "evidence": "A documented flow policy (who may talk to what, on which service) and proof that the network enforces it.",
+      "fix": "Align the firewall with the flow policy: remove flows that are not in it, add the approved ones that are missing.",
+      "alternative": "Enforce the flow at the application layer (proxy, API gateway) when network rules cannot express it precisely.",
+      "keywords": "information flow policy enforcement approved path"
+    },
+    {
+      "framework": "iso27002", "control_id": "8.22", "title": "Segregation of networks",
+      "applies": {"expected": ["deny", "allow"], "any_boundary": true},
+      "summary": "Groups of users, services and systems are separated into network domains, with controlled traffic between them.",
+      "evidence": "Network domains with defined trust levels, rules between them, and verification that the separation works.",
+      "fix": "Restrict traffic between these two domains to what the business needs, and review the rule set.",
+      "alternative": "If physical or VLAN separation is not possible, use host-based firewalls and access control lists to separate the groups.",
+      "keywords": "segregation network domains separation vlan groups users"
+    },
+    {
+      "framework": "iso27002", "control_id": "8.20", "title": "Networks security",
+      "applies": {"services": ["admin", "mgmt"], "expected": ["deny", "allow"]},
+      "summary": "Networks and network devices are secured and managed, including who can reach their management interfaces.",
+      "evidence": "Management access limited to an admin network, and tests showing user networks cannot reach management services.",
+      "fix": "Allow management services (SSH, RDP, web admin, SNMP) only from the admin network; block them from user networks.",
+      "alternative": "Use a jump host or bastion in the admin network as the only way to manage these systems.",
+      "keywords": "network devices management interface admin ssh rdp snmp secure"
+    },
+    {
+      "framework": "cis_controls", "control_id": "13.4", "title": "Traffic filtering between network segments",
+      "applies": {"expected": ["deny", "allow"], "any_boundary": true},
+      "summary": "Traffic between network segments is filtered where appropriate.",
+      "evidence": "Filtering rules between segments and results showing unapproved traffic is dropped.",
+      "fix": "Add or tighten the filter between these segments so this service is dropped.",
+      "alternative": "Use micro-segmentation (host firewalls) where segment-level filtering is too coarse.",
+      "keywords": "traffic filtering segments drop filter"
+    },
+    {
+      "framework": "cis_controls", "control_id": "12.2", "title": "Secure network architecture",
+      "applies": {"expected": ["deny", "allow"], "any_boundary": true},
+      "summary": "The network is designed with segmentation, least privilege and availability in mind, and the design is kept up to date.",
+      "evidence": "A current network diagram with zones and trust levels, and proof that the implementation matches it.",
+      "fix": "Update the design or the firewall so that they agree for this path, then re-test.",
+      "alternative": "Record the deviation in the architecture document with an owner and a date to resolve it.",
+      "keywords": "architecture design segmentation least privilege diagram"
+    }
+  ],
+  "playbooks": [
+    {"id": "database", "match": {"ports": [1433, 1521, 3306, 5432, 6379, 27017]}, "title": "Database reachable across a boundary",
+     "text": "Databases should only accept connections from the application servers that use them. Direct reachability from user networks bypasses application access control and logging. Allow the database port only from the named application host(s), and require database authentication and TLS."},
+    {"id": "remote_admin", "match": {"ports": [22, 23, 3389, 5900, 5985, 5986]}, "title": "Remote administration reachable",
+     "text": "Administration services (SSH, RDP, VNC, WinRM, Telnet) are the most direct way to take over a system. Allow them only from the admin network or a jump host, with MFA, and never from user or guest networks. Telnet should be disabled entirely."},
+    {"id": "file_directory", "match": {"ports": [139, 445, 389, 636, 2049]}, "title": "File sharing or directory reachable",
+     "text": "SMB, NFS and LDAP across a boundary enable lateral movement and credential theft. Allow them only to the file and directory servers that a department needs, never into the CDE."},
+    {"id": "web", "match": {"ports": [80, 443, 8080, 8443, 8000, 8008, 8888, 9443]}, "title": "Web or application port reachable",
+     "text": "Web and API ports should only be reachable by the clients that use them. Admin web interfaces belong on the management network. If a web service must be reachable, put it behind a reverse proxy or gateway with authentication."},
+    {"id": "infra_udp", "match": {"ports": [53, 123, 161]}, "title": "Infrastructure UDP reachable",
+     "text": "DNS, NTP and SNMP are often forgotten in rule sets and can leak information or allow tunnelling. Point clients at approved internal resolvers and time servers only, and block SNMP from user networks."},
+    {"id": "icmp", "match": {"protocol": "icmp"}, "title": "Ping answered across a boundary",
+     "text": "A ping reply shows the protected network is routed and open at layer 3, which helps an attacker map it. Block ICMP echo into sensitive zones unless monitoring needs it from a specific host."},
+    {"id": "unproven", "match": {"outcome": "unproven"}, "title": "No answer, but not proven",
+     "text": "Silence can mean a firewall block or simply a service that is switched off. Only the firewall's own log of a block proves the path is closed. Connect the firewall's logs (Step 3) and enable logging on its block rules, then run again."},
+    {"id": "approved_down", "match": {"outcome": "down"}, "title": "An approved service is not reachable",
+     "text": "An approved business flow did not answer. Either the service is down or a rule blocks it. This is an availability problem, not a segmentation breach, but it should be fixed so people do not create risky workarounds."},
+    {"id": "logged_pass", "match": {"outcome": "open"}, "title": "The firewall let a forbidden attempt through",
+     "text": "The target did not answer, but the firewall's log shows the attempt was allowed. The boundary is open; only the target's own configuration stopped it. Close the path at the firewall."}
+  ]
+}

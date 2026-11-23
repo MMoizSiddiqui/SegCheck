@@ -141,8 +141,8 @@ PACKS = [
         "key": "iso-8-20-mgmt-plane", "standard": "ISO/IEC 27002:2022", "family": "iso",
         "title": "Firewall management plane protection",
         "controls": "8.20 · NIST SC-7",
-        "summary": "Checks that the boundary device's own interface in the probe zone does not expose SSH, web admin or SNMP.",
-        "analyst": "Control 8.20 covers securing network devices. If a guest can reach the firewall's admin interface, segmentation can be undone. Uses the boundary devices you declared.",
+        "summary": "Checks that this PC cannot reach the firewall's own admin services (SSH, web admin, SNMP) on any of its addresses.",
+        "analyst": "Control 8.20 covers securing network devices. If a user network can reach the firewall's admin interface on any of its addresses, segmentation can be undone. Uses the firewall addresses entered in Step 3.",
         "source": "any", "targets": "devices", "groups": ["mgmt_plane", "mgmt_plane_udp"], "mappings": [ISO_820, NIST_SC7], "pci": [],
     },
     {
@@ -159,6 +159,76 @@ PACKS_BY_KEY = {pack["key"]: pack for pack in PACKS}
 FAMILIES = {"pci": "PCI DSS 4.0.1", "nist": "NIST SP 800-53", "iso": "ISO/IEC 27002", "cis": "CIS Controls v8"}
 
 
+# Plain-language explanation shown when the auditor expands a standard in Step 4.
+EXPLAIN = {
+    "pci-cde-isolation": {
+        "asks": "The card-data environment (CDE: the systems that store, process or send card numbers) must be walled off "
+                "from every network that is not part of it. PCI DSS 1.3.1 says only necessary traffic may enter the CDE; "
+                "11.4.5 says you must prove the wall works by testing it from each out-of-scope network.",
+        "why": "If an ordinary office PC can reach the card database, an attacker who takes over that PC can steal card "
+               "data. The whole office then falls into PCI scope, which makes the audit far bigger and more expensive.",
+        "pass": "Nothing on any CDE system answered from this network: the wall holds (backed by firewall logs when they are connected).",
+        "fail": "At least one CDE service answered from this network. The report names the port, the firewall rule that "
+                "let it through, and how to fix it.",
+    },
+    "pci-untrusted-to-cde": {
+        "asks": "PCI DSS 1.4.2: traffic from untrusted networks (guest Wi-Fi, the internet-facing DMZ) into the CDE must be "
+                "restricted. 11.4.5: prove it by testing from those networks.",
+        "why": "Guest and DMZ networks are where outsiders and exposed servers live. A path from there to card data is the "
+               "shortest route for an attack.",
+        "pass": "No CDE service answered from the untrusted network.",
+        "fail": "An outsider-facing network can reach card systems: the most serious kind of segmentation failure.",
+    },
+    "pci-cde-egress": {
+        "asks": "PCI DSS 1.3.2: the CDE may only start the outbound connections it really needs. Everything else from "
+                "inside the CDE must be blocked.",
+        "why": "Malware that gets into a card system needs a way out to send stolen data or spread. Tight outbound rules cut that off.",
+        "pass": "CDE systems could not open connections to the other zones.",
+        "fail": "The CDE can reach other zones on services it should not need.",
+    },
+    "nist-sc7-boundary": {
+        "asks": "NIST SC-7 (boundary protection): traffic must be controlled where networks meet. AC-4 (information flow "
+                "enforcement): data may only flow along approved paths.",
+        "why": "This is the general check that every zone really is separate, not only the card zone: admin access, "
+               "databases, file shares and ping between zones should all be blocked.",
+        "pass": "No system in another zone answered on admin, database, file or ping paths.",
+        "fail": "Some path between zones is open; the report lists each one with its rule.",
+    },
+    "nist-sc7-deny-default": {
+        "asks": "NIST SC-7(5): the firewall must block everything by default and only allow what was explicitly approved.",
+        "why": "\"Allow everything except a few bad ports\" always leaves gaps. Deny-by-default means a forgotten rule fails "
+               "safe. This check uses every probe method against the most sensitive zones (card data, servers, HR).",
+        "pass": "Nothing in the sensitive zones answered: the default is deny.",
+        "fail": "Something answered that was never approved. If it is needed, record it as an approved rule (My own rules); otherwise close it.",
+    },
+    "iso-8-22-segregation": {
+        "asks": "ISO/IEC 27002 control 8.22: groups of users, services and systems should be kept on separate networks.",
+        "why": "Separating networks limits how far an attacker or a mistake can spread. This proves that your network "
+               "is cut off from the others.",
+        "pass": "Your network could not reach the other networks on admin, database, file or ping paths.",
+        "fail": "Your network is not fully separated; the report shows which systems and services were reachable.",
+    },
+    "iso-8-20-mgmt-plane": {
+        "asks": "ISO/IEC 27002 control 8.20 (networks security) and NIST SC-7 (boundary protection): the network devices "
+                "themselves must be protected. The firewall's admin page, SSH and SNMP must not be reachable from user networks. "
+                "A firewall is one box with an address in every network it joins (for example 10.40.0.1 here and 10.30.0.1 "
+                "in the card network); traffic sent to any of those addresses reaches the same box, so every address is tested.",
+        "why": "Whoever reaches the firewall's admin interface can change its rules and undo all the segmentation. Many firewalls "
+               "answer their admin page on every address by default, so testing only the nearest one is not enough.",
+        "pass": "None of the firewall's addresses offered SSH, web admin or SNMP to this PC (backed by its logs when they are connected).",
+        "fail": "The firewall can be managed from this network. The report names the exact address (door) that answered.",
+    },
+    "cis-12-13-filtering": {
+        "asks": "CIS Controls v8 13.4: filter traffic between network segments. 12.2: keep a secure network architecture.",
+        "why": "A quick, broad baseline across every boundary, including UDP services (DNS, NTP, SNMP) that firewall rules often forget.",
+        "pass": "No other zone answered on admin, database, file, UDP or ping.",
+        "fail": "Some traffic crosses between segments; the report lists it.",
+    },
+}
+for _pack in PACKS:
+    _pack["explain"] = EXPLAIN[_pack["key"]]
+
+
 class PackError(ValueError):
     pass
 
@@ -168,16 +238,27 @@ def _targets(pack, environment, source_zone):
     role = lambda key: networks.get(key, {}).get("role", "custom")
     kind = pack["targets"]
     if kind == "devices":
+        # Every known address of each firewall that borders this PC's network: its address here, and (if the auditor
+        # listed them in Step 3) its addresses in the other networks. One box, many doors: each door is tested.
+        names = {zone.zone_key: zone.name for zone in db.session.query(Zone).all()}
         rows = []
         for device in environment.get("devices", []):
-            address = device.get("interface_ip")
-            if address and source_zone in device.get("zones", []):
-                rows.append({"name": f"{device['name']} ({source_zone} interface)", "address": address, "zone": source_zone})
+            if device.get("kind") == "none" or source_zone not in device.get("zones", []):
+                continue
+            addresses = ([device["interface_ip"]] if device.get("interface_ip") else []) + list(device.get("other_ips", []))
+            for address in addresses:
+                zone = next((key for key in device.get("zones", []) if key in networks and
+                             ipaddress.ip_address(address) in ipaddress.ip_network(networks[key]["cidr"])), None)
+                if zone:
+                    rows.append({"name": f"{device['name']} (its address in {names.get(zone, zone)})", "address": address,
+                                 "zone": zone})
         return rows
     rows = []
     for asset, zone in db.session.query(Asset, Zone).join(Zone, Asset.zone_id == Zone.id).order_by(Zone.zone_key, Asset.name).all():
         if zone.zone_key == source_zone or zone.zone_key not in networks:
             continue
+        if asset.name.endswith(" interface"):
+            continue  # a firewall's own address is not a system in that network (only the management check tests it)
         zone_role = role(zone.zone_key)
         if (kind == "cde" and zone_role == "cde") or (kind == "non_cde" and zone_role != "cde") \
                 or kind == "other_zones" or (kind == "sensitive" and zone_role in SENSITIVE_ROLES):
@@ -208,7 +289,7 @@ def evaluate_pack(pack, environment, groups=None):
     targets = _targets(pack, environment, source_zone)
     if not targets:
         need = {"cde": "a CDE zone with at least one registered asset", "non_cde": "assets in non-CDE zones",
-                "sensitive": "assets in CDE, server or HR zones", "devices": "a boundary device with an interface IP in the probe zone",
+                "sensitive": "assets in CDE, server or HR zones", "devices": "at least one address of the firewall (Step 3, 3a: \"Firewall's address in this network\" or \"its addresses in other networks\")",
                 "other_zones": "assets in other zones"}[pack["targets"]]
         return {"ready": False, "reason": f"Needs {need}.", "targets": [], "attempts": 0}
     per_target = sum(max(1, len(PROBE_GROUPS[g]["ports"])) for g in selected_groups(pack, groups))
@@ -292,3 +373,71 @@ def build_pack_documents(pack_key, environment, groups=None):
             "checks": part,
         })
     return pack, documents
+
+
+def build_multi_document(pack_keys, environment, groups=None):
+    """One policy document testing several standards at once.
+
+    Each probe (same host, protocol and ports, same expectation) is sent once and carries the mappings of
+    every chosen standard that asks for it, so the results can be judged per standard and per control.
+    Returns (packs_used, skipped [(pack, reason)], document)."""
+    chosen = [PACKS_BY_KEY[key] for key in dict.fromkeys(pack_keys) if key in PACKS_BY_KEY]
+    if not chosen:
+        raise PackError("Choose at least one standard.")
+    merged, order, used, skipped = {}, [], [], []
+    for pack in chosen:
+        wanted = [group for group in pack["groups"] if groups is None or group in set(groups)]
+        if not wanted:
+            skipped.append((pack, "none of its probe kinds is ticked"))
+            continue
+        try:
+            _, documents = build_pack_documents(pack["key"], environment, wanted)
+        except PackError as exc:
+            skipped.append((pack, str(exc)))
+            continue
+        used.append(pack)
+        for document in documents:
+            for check in document["checks"]:
+                key = (check["destination_zone"], check["destination_host"], check["protocol"],
+                       tuple(check.get("ports", [])), check["expected"])
+                if key not in merged:
+                    merged[key] = {**check, "standards": [], "framework_mappings": [], "pci_requirements": [],
+                                   "why": check["rationale"].split(" Standard: ")[0]}
+                    order.append(key)
+                item = merged[key]
+                label = f"{pack['standard']} {pack['controls']}"
+                if label not in item["standards"]:
+                    item["standards"].append(label)
+                for mapping in check.get("framework_mappings", []):
+                    if all((m["framework"], m["control_id"]) != (mapping["framework"], mapping["control_id"])
+                           for m in item["framework_mappings"]):
+                        item["framework_mappings"].append(dict(mapping))
+                item["pci_requirements"] = sorted(set(item["pci_requirements"]) | set(check.get("pci_requirements", [])))
+    if not used:
+        raise PackError("None of the chosen standards fits this network: " +
+                        "; ".join(f"{pack['title']}: {reason}" for pack, reason in skipped))
+    checks, total = [], 0
+    for number, key in enumerate(order, start=1):
+        item = merged[key]
+        check = {name: value for name, value in item.items() if name not in {"standards", "why", "id"}}
+        check["id"] = f"STD-{number:03}"
+        check["rationale"] = (f"{item['why']} Standards: {'; '.join(item['standards'])} (supporting technical check).")[:2000]
+        check["name"] = check["name"][:160]
+        checks.append(check)
+        total += max(1, len(check.get("ports", [])))
+    if total > MAX_WEB_PROBE_ATTEMPTS:
+        raise PackError(f"These standards together need {total} attempts; the limit is {MAX_WEB_PROBE_ATTEMPTS}. "
+                        "Untick some standards or probe kinds.")
+    source_zone = environment["source_zone"]
+    zone_names = {zone.zone_key: zone.name for zone in db.session.query(Zone).all()}
+    zones = {source_zone} | {check["destination_zone"] for check in checks}
+    document = {
+        "schema_version": 1,
+        "policy_id": _unique_key(f"multi-{source_zone}"),
+        "name": f"{len(used)} standards · from {source_zone}"[:160],
+        "organization": environment.get("organization", "Organisation"),
+        "pci_dss_version": "4.0.1",
+        "zones": [{"id": key, "name": zone_names.get(key, key)} for key in sorted(zones)],
+        "checks": checks,
+    }
+    return used, skipped, document

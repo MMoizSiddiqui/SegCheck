@@ -16,7 +16,7 @@ REASONS = [
     ("connection_refused", "Refused",
      "The target answered but nothing listens on this port. The network path reaches the host; only this port is closed."),
     ("connection_timeout", "No reply",
-     "No reply within 1 second. A firewall silently dropped the attempt, or the host is off or does not exist. "
+     "No reply within the wait. A firewall silently dropped the attempt, or the host is off or does not exist. "
      "Silence alone cannot tell which."),
     ("socket_error_network_unreachable", "No route",
      "This PC has no route to that network, so nothing left the PC."),
@@ -36,12 +36,27 @@ REASONS = [
     ("icmp_ping_utility_unavailable", "Ping unavailable",
      "The ping tool is not available on this PC, so nothing was sent."),
     ("icmp_no_echo_reply", "No ping reply",
-     "No ping reply within 1 second. A firewall dropped it, ping is disabled on the host, or the host is off."),
+     "No ping reply within the wait. A firewall dropped it, ping is disabled on the host, or the host is off."),
 ]
 
 
 def explain(reason: str, protocol: str = "") -> dict:
-    """{label, text} for one attempt's raw reason code (e.g. 'connection_timeout; not proof …')."""
+    """{label, text} for one attempt's raw reason code (e.g. 'connection_timeout; not proof …'), plus what happened
+    on a second try when the first one was silent (see services/patience.py)."""
+    result = _explain(reason, protocol)
+    note = next((part.strip() for part in str(reason or "").split(";")[1:] if "2nd try" in part or "in 2 tries" in part), "")
+    if note.startswith("answered on the 2nd try"):
+        return {"label": result["label"] + " (2nd try)",
+                "text": result["text"] + f" The first try got no reply; then it {note}. The path is open."}
+    if "blocked by the firewall (its log shows it)" in str(reason or ""):
+        return {"label": "Blocked (logged)", "text": result["text"].split(". ")[0] + ". The firewall's own log shows it "
+                "blocked this attempt, so the silence is explained: blocked, and proven."}
+    if note.startswith("no reply in 2 tries"):
+        return {"label": result["label"], "text": result["text"] + f" Tried twice to rule out a lost packet or a slow network: {note}."}
+    return result
+
+
+def _explain(reason: str, protocol: str = "") -> dict:
     code = str(reason or "").split(";")[0].strip()
     if code.startswith("udp_"):
         parts = code[4:]
@@ -53,7 +68,7 @@ def explain(reason: str, protocol: str = "") -> dict:
         if "port_unreachable" in parts:
             return {"label": "Port closed", "text": f"The host reported this UDP port closed: it is reachable, but no {service} service runs there."}
         if parts.endswith("no_reply"):
-            return {"label": "No reply", "text": f"No {service} reply within 1 second. A firewall dropped it, or no service is there."}
+            return {"label": "No reply", "text": f"No {service} reply within the wait. A firewall dropped it, or no service is there."}
         return {"label": "Error", "text": "The UDP attempt could not be completed because of a local network error."}
     for prefix, label, text in REASONS:
         if prefix != "udp_" and code.startswith(prefix):
@@ -66,7 +81,7 @@ def glossary() -> list:
     rows = [[prefix, label, text] for prefix, label, text in REASONS if prefix != "udp_"]
     for key, name in UDP_NAMES.items():
         rows += [[f"udp_{key}_reply_received", "Replied", f"The {name} service answered a real request, so this path is open."],
-                 [f"udp_{key}_no_reply", "No reply", f"No {name} reply within 1 second. A firewall dropped it, or no service is there."],
+                 [f"udp_{key}_no_reply", "No reply", f"No {name} reply within the wait. A firewall dropped it, or no service is there."],
                  [f"udp_{key}_port_unreachable", "Port closed", f"The host reported this UDP port closed: no {name} service runs there."]]
     return rows
 
@@ -127,13 +142,52 @@ def _rule(item, attempts, firewall_connected):
         why = f"It must work, but it did not answer ({missing}). The approved service is down or blocked."
         fix = "Check that the service is running and that no rule blocks this approved flow."
     label, tone = OUTCOMES[key]
-    return {"check_id": row.get("check_id"), "name": row.get("check_name") or row.get("check_id"),
+    cause = _cause(key, attempts)
+    return {"cause": cause, "check_id": row.get("check_id"), "name": row.get("check_name") or row.get("check_id"),
             "host": row.get("destination_host"), "zone": row.get("destination_zone"), "source": row.get("source_zone"),
             "service": _service(row), "method": item.get("method_label") or method_label(item.get("method", "")),
             "expected": "Must be blocked" if expected == "deny" else "Must work",
             "result": item["result"], "outcome": key, "outcome_label": label, "tone": tone,
             "why": why, "fix": fix, "attempts": attempts, "cde": item.get("cde", False),
-            "reason": "" if (row.get("rationale") or "").strip() in ("", "Auditor-defined rule.") else row["rationale"].strip()}
+            "reason": "" if (row.get("rationale") or "").strip() in ("", "Auditor-defined rule.")
+            or "(supporting technical check)" in (row.get("rationale") or "") else row["rationale"].strip()}
+
+
+def _clean_log_rule(label):
+    """Older reports stored the syslog header with the log prefix; show only the rule's name."""
+    if "SEGCHECK-" in label:
+        from segcheck_web.services.rule_attribution import log_rule_label
+        return ", ".join(log_rule_label({"format": "iptables", "rule": part}) for part in label.split(", "))
+    return label
+
+
+def _cause(key, attempts):
+    """The firewall rule behind this outcome, from its logs and/or the loaded rule export."""
+    if key in {"fail", "open"}:
+        wanted, relevant = "pass", [a for a in attempts if a["observed"] == "reachable" or a.get("firewall") == "logged_pass"]
+    elif key in {"down"}:
+        wanted, relevant = "block", [a for a in attempts if a["observed"] != "reachable"]
+    elif key in {"proven", "unproven"}:
+        wanted, relevant = "block", attempts
+    else:
+        return None
+    logged = list(dict.fromkeys(_clean_log_rule(a["log_rule"]) for a in relevant if a.get("log_rule")))
+    configured = [a["config_rule"] for a in relevant if a.get("config_rule") and a["config_rule"].get("action") == wanted]
+    if not logged and not configured:
+        return None
+    config = configured[0] if configured else None
+    if key in {"fail", "open"}:
+        title = "Let through by firewall rule"
+        fix = ("Remove or narrow this rule (or add a more specific block rule above it), then run the audit again."
+               if config or logged else "")
+    elif key == "down":
+        title, fix = "Blocked by firewall rule", "Add an allow rule for this approved service above it, or correct this rule."
+    else:
+        title, fix = "Blocked by firewall rule", ""
+    return {"title": title, "rule": logged[0] if logged else config["label"],
+            "source": " + ".join(part for part in ("firewall log" if logged else "", "rule export" if config else "") if part),
+            "detail": f"{config['where']}: {config['detail']}" if config else "",
+            "uncertain": bool(config and config.get("uncertain")), "fix": fix, "blocking": wanted == "block"}
 
 
 def build(report: dict) -> dict:
@@ -147,6 +201,9 @@ def build(report: dict) -> dict:
     boundary = report.get("boundary_evidence") if isinstance(report.get("boundary_evidence"), dict) else {}
     firewall_by_attempt = {(a.get("check_id"), a.get("port"), a.get("protocol")): a.get("evidence")
                            for a in boundary.get("attempts", []) if isinstance(a, dict)}
+    rule_by_attempt = {(a.get("check_id"), a.get("port"), a.get("protocol")): (a.get("log_rule") or "",
+                       a.get("config_rule") if isinstance(a.get("config_rule"), dict) else None)
+                       for a in boundary.get("attempts", []) if isinstance(a, dict)}
     firewall_connected = any(device.get("connected") for device in boundary.get("devices", []) if isinstance(device, dict))
 
     attempts_by_check = {}
@@ -158,7 +215,9 @@ def build(report: dict) -> dict:
             "port": detail.get("port"), "protocol": detail.get("protocol"), "observed": detail.get("observed"),
             "label": reading["label"], "text": reading["text"], "ms": detail.get("duration_ms"),
             "firewall": firewall_by_attempt.get((detail.get("check_id"), detail.get("port"), detail.get("protocol"))),
-            "host": detail.get("destination_host")})
+            "host": detail.get("destination_host"),
+            "log_rule": rule_by_attempt.get((detail.get("check_id"), detail.get("port"), detail.get("protocol")), ("", None))[0],
+            "config_rule": rule_by_attempt.get((detail.get("check_id"), detail.get("port"), detail.get("protocol")), ("", None))[1]})
 
     rules = [_rule(item, attempts_by_check.get(item["row"].get("check_id"), []), firewall_connected) for item in analysis["checks"]]
     counts = {"rules": len(rules), "passed": sum(r["tone"] == "pass" for r in rules),
@@ -184,15 +243,97 @@ def build(report: dict) -> dict:
     else:
         verdict = ("NOTHING RUN", "unproven", "Nothing was tested from this PC", "All rules start in other networks.")
 
+    problems = run_problems(environment, details if isinstance(details, list) else [], boundary, counts)
+    measured = [d for d in details if isinstance(d, dict)] if isinstance(details, list) else []
+    if measured and all(str(d.get("reason", "")).split(";")[0].strip() in LOCAL_FAILURE_CODES for d in measured):
+        verdict = ("COULD NOT TEST", "fail", "Nothing reached the network",
+                   "Every attempt failed on this PC before it reached the network, so this report says nothing about the "
+                   "firewall. Fix the problem below and run the audit again.")
+
     uses_pci = any(r for r in report.get("results", []) if isinstance(r, dict) and (
         r.get("pci_requirements") or any(isinstance(m, dict) and m.get("framework") == "pci_dss" for m in r.get("framework_mappings") or [])))
     standards = sorted({str(m.get("framework")) for r in report.get("results", []) if isinstance(r, dict)
                         for m in r.get("framework_mappings") or [] if isinstance(m, dict) and m.get("framework")})
     return {"verdict": {"word": verdict[0], "tone": verdict[1], "title": verdict[2], "sentence": verdict[3]},
-            "counts": counts, "rules": rules, "uses_pci": uses_pci, "standards": standards,
+            "counts": counts, "rules": rules, "uses_pci": uses_pci, "standards": standards, "problems": problems,
             "firewall_connected": firewall_connected, "analysis": analysis,
             "source_ip": environment.get("source_ip", ""), "source_zone": assessment.get("source_zone") or environment.get("source_zone", ""),
             "networks": networks}
+
+
+LOCAL_FAILURE_CODES = {
+    "socket_error_source_address_unavailable": (
+        "This PC's Step 1 address was not available for {n} attempt(s) (the PC changed network or lost its connection).",
+        "Open New audit, Step 1, pick the network this PC is in now, then run the audit again."),
+    "socket_error_access_denied_by_local_policy": (
+        "Security software on this PC refused to send {n} attempt(s).",
+        "Allow Python / SegCheck in this PC's firewall or antivirus, then run the audit again."),
+}
+
+
+def run_problems(environment: dict, details: list, boundary: dict, counts: dict) -> list:
+    """What limited this run, in plain words, each with what to do: shown at the top of the report."""
+    problems = []
+    devices = [d for d in environment.get("devices", []) if isinstance(d, dict)] if isinstance(environment, dict) else []
+    logging_device = next((d for d in devices if d.get("logging")), None)
+    firewall = next((d for d in devices if d.get("kind") not in (None, "none")), None)
+    summary = boundary.get("summary", {}) if isinstance(boundary.get("summary"), dict) else {}
+    logged = int(summary.get("logged_block", 0) or 0) + int(summary.get("logged_pass", 0) or 0)
+    unmatched = int(summary.get("no_matching_log", 0) or 0) + int(summary.get("not_connected", 0) or 0)
+    codes = [str(d.get("reason", "")).split(";")[0].strip() for d in details if isinstance(d, dict)]
+
+    for code, (what, fix) in LOCAL_FAILURE_CODES.items():
+        if code in codes:
+            problems.append({"tone": "fix", "title": "Some attempts never reached the network",
+                             "text": what.format(n=codes.count(code)), "fix": fix})
+    no_route = "socket_error_network_unreachable"  # not a broken setup: that network is just not routed from this PC
+    if no_route in codes:
+        hosts = sorted({str(d.get("destination_host")) for d in details if isinstance(d, dict)
+                        and str(d.get("reason", "")).startswith(no_route)})
+        problems.append({"tone": "info", "title": "No route from this PC to some targets",
+                         "text": f"{codes.count(no_route)} attempt(s) to {', '.join(hosts[:6])}{' …' if len(hosts) > 6 else ''} "
+                                 "never left this PC: it has no route to them. That network is not reachable from here, which "
+                                 "keeps it apart, but the firewall itself was not tested on those paths.",
+                         "fix": "If that network should be reachable through the firewall, check this PC's connection and "
+                                "routes (and Step 2), then run the audit again."})
+    if logging_device and not logged and unmatched:
+        problems.append({"tone": "fix", "title": "The firewall's logs did not arrive",
+                         "text": "Step 3 says the firewall sends its logs to this PC, but no log line matched any attempt. "
+                                 "So nothing that stayed silent could be proven as blocked.",
+                         "fix": "Do Step 3b on the firewall (send its logs to this PC, log its block rules), wait until Step 3 "
+                                "shows 'Logs arriving', then run the audit again."})
+    elif logging_device and logged and int(summary.get("no_matching_log", 0) or 0):
+        problems.append({"tone": "fix", "title": "The firewall logged only some attempts",
+                         "text": f"{logged} attempt(s) were found in the firewall's log, {summary.get('no_matching_log')} were "
+                                 "not: some of its rules do not write a log line.",
+                         "fix": "Turn on logging for every rule between this PC's network and the targets (including the final "
+                                "block rule), then run the audit again."})
+    elif firewall and not logging_device and counts.get("unproven"):
+        problems.append({"tone": "fix", "title": "No firewall log feed, so blocks cannot be proven",
+                         "text": "The firewall's logs were not connected in Step 3, so attempts that stayed silent are reported as "
+                                 "'not proven' rather than passed." + (" SegCheck cannot read logs from the firewall type chosen "
+                                 "('Other')." if firewall.get("kind") == "other" else ""),
+                         "fix": "In Step 3a choose the firewall's type and tick 'Connect its logs', do Step 3b, then run the "
+                                "audit again." if firewall.get("kind") != "other" else
+                                "Nothing to fix in SegCheck: keep these results as 'not proven', or ask for the firewall's "
+                                "logs another way and attach them to the audit file."})
+    elif not firewall and counts.get("unproven"):
+        problems.append({"tone": "fix", "title": "No firewall declared, so blocks cannot be proven",
+                         "text": "Step 3 says there is no firewall (or it is unknown), so silent attempts stay 'not proven'.",
+                         "fix": "If a firewall separates these networks, choose 'There is a firewall' in Step 3, connect its "
+                                "logs (3b), then run the audit again."})
+    if int(summary.get("contradictions", 0) or 0):
+        problems.append({"tone": "fix", "title": "The firewall's log and the result disagree",
+                         "text": f"{summary.get('contradictions')} attempt(s) were logged as blocked, yet the target answered. "
+                                 "Another path (a second router, VPN or NAT) may lead around this firewall.",
+                         "fix": "Check for other routes between the two networks, then run the audit again."})
+    second = sum("answered on the 2nd try" in str(d.get("reason", "")) for d in details if isinstance(d, dict))
+    if second:
+        problems.append({"tone": "info", "title": "The network was slow or lost packets",
+                         "text": f"{second} attempt(s) answered only on the second try. The results are still right "
+                                 "(SegCheck tries a silent attempt twice), but the network was slow during this run.",
+                         "fix": ""})
+    return problems
 
 
 def map_data(record) -> dict:
@@ -226,3 +367,46 @@ def map_data(record) -> dict:
             "source_name": names.get(view["source_zone"]) or environment.get("site") or view["source_zone"],
             "zones": [{**zone, "hosts": list(zone["hosts"].values())} for zone in zones.values()],
             "attempts": attempts[:400], "url": f"/assessments/{record.id}"}
+
+
+BAD_OUTCOMES = {"fail", "open", "down"}
+
+
+def _rule_key(rule):
+    ports = tuple(sorted({a["port"] for a in rule["attempts"] if isinstance(a.get("port"), int) and a.get("protocol") != "icmp"}))
+    protocol = next((a["protocol"] for a in rule["attempts"]), "")
+    return (rule.get("host"), protocol, ports, rule["expected"])
+
+
+def compare(older: dict, newer: dict) -> dict:
+    """Drift and regression between two audits: what was fixed, what broke, what stayed the same."""
+    before = {_rule_key(r): r for r in build(older)["rules"] if r["outcome"] != "skipped"}
+    after_view = build(newer)
+    after = {_rule_key(r): r for r in after_view["rules"] if r["outcome"] != "skipped"}
+    rows = {"regression": [], "fixed": [], "still_failing": [], "unchanged": [], "new": [], "gone": []}
+    for key in list(dict.fromkeys(list(before) + list(after))):
+        old, new = before.get(key), after.get(key)
+        if old and new:
+            old_bad, new_bad = old["outcome"] in BAD_OUTCOMES, new["outcome"] in BAD_OUTCOMES
+            kind = ("regression" if new_bad and not old_bad else "fixed" if old_bad and not new_bad
+                    else "still_failing" if new_bad else "unchanged")
+        else:
+            kind = "new" if new else "gone"
+        item = new or old
+        ports = ", ".join(str(p) for p in key[2]) or "ping"
+        rows[kind].append({"what": f"{item['host']} · {key[1].upper()} {ports}", "expected": key[3],
+                           "before": old["outcome_label"] if old else "not tested", "before_tone": old["tone"] if old else "skipped",
+                           "after": new["outcome_label"] if new else "not tested", "after_tone": new["tone"] if new else "skipped"})
+    if rows["regression"]:
+        headline = ("REGRESSION", "fail", f"{len(rows['regression'])} path(s) got worse since the earlier audit",
+                    "Something that held before now fails: a change (firewall rule, new service, routing) opened it. See the red rows.")
+    elif rows["fixed"] and not rows["still_failing"]:
+        headline = ("FIXED", "pass", f"{len(rows['fixed'])} finding(s) fixed, nothing got worse",
+                    "The retest proves the remediation: every path that failed before now holds.")
+    elif rows["still_failing"]:
+        headline = ("STILL FAILING", "fail", f"{len(rows['still_failing'])} finding(s) not fixed yet",
+                    "No new problems, but earlier findings are still open.")
+    else:
+        headline = ("NO DRIFT", "pass", "Same results as the earlier audit", "Nothing changed between the two audits.")
+    return {"headline": {"word": headline[0], "tone": headline[1], "title": headline[2], "sentence": headline[3]},
+            "rows": rows, "counts": {key: len(value) for key, value in rows.items()}}

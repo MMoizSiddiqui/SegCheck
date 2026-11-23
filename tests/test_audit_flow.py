@@ -98,7 +98,8 @@ def test_step2_errors_are_specific_and_nothing_half_saved(app, authenticated_cli
     page = authenticated_client.get(response.headers["Location"], base_url=BASE).data
     assert b"Not an IP address: 10.30.0.x" in page
     response = post(authenticated_client, "/audit/targets", {"t_name": ["Overlap"], "t_cidr": ["10.30.0.0/16"], "t_type": ["custom"], "t_hosts": [""]})
-    assert b"must not overlap" in authenticated_client.get(response.headers["Location"], base_url=BASE).data
+    assert b"overlaps Card systems (10.30.0.0/24), a target network already added" in authenticated_client.get(
+        response.headers["Location"], base_url=BASE).data
 
 
 def test_step2_names_are_escaped_and_hosts_can_be_removed(app, authenticated_client, local):
@@ -131,10 +132,7 @@ def test_known_hosts_and_ping_sweep_stay_inside_the_target_network(app, authenti
                         lambda host, port, timeout, source_ip=None: pinged.append(host) or ProbeOutcome(
                             "reachable" if host == "10.30.0.7" else "inconclusive", "test", 1.0, source_ip))
     token = get_token(authenticated_client, "/audit/")
-    refused = authenticated_client.post(f"/audit/targets/{key}/sweep", data={"csrf_token": token}, base_url=BASE,
-                                        headers={"Referer": BASE + "/audit/"})
-    assert refused.status_code == 400 and "Tick the box" in refused.get_json()["error"] and not pinged
-    swept = authenticated_client.post(f"/audit/targets/{key}/sweep", data={"csrf_token": token, "authorized": "yes"},
+    swept = authenticated_client.post(f"/audit/targets/{key}/sweep", data={"csrf_token": token},
                                       base_url=BASE, headers={"Referer": BASE + "/audit/"}).get_json()
     assert swept["pinged"] == 254 and len(pinged) == 254 and all(p.startswith("10.30.0.") for p in pinged)
     assert {h["address"] for h in swept["hosts"]} == {"10.30.0.7", "10.30.0.20", "10.30.0.99"}
@@ -204,10 +202,9 @@ def test_listener_learns_the_firewall_from_its_first_recognised_log():
 
 # ---------------- Step 4 and launch ----------------
 
-def test_launch_needs_authorisation_and_never_probes_without_it(app, authenticated_client, local, no_worker):
-    setup_audit(authenticated_client)
+def test_launch_needs_step1_first_and_never_probes_without_it(app, authenticated_client, local, no_worker):
     response = post(authenticated_client, "/audit/launch", {"mode": "standard", "pack": "pci-cde-isolation", "groups": ["database"]})
-    assert "#step-4" in response.headers["Location"] and not no_worker
+    assert "#step-1" in response.headers["Location"] and not no_worker
     with app.app_context():
         assert db.session.query(AssessmentJob).count() == 0 and db.session.query(Policy).count() == 0
 
@@ -215,7 +212,7 @@ def test_launch_needs_authorisation_and_never_probes_without_it(app, authenticat
 def test_standard_with_ticked_probes_runs_as_one_job(app, authenticated_client, local, no_worker):
     setup_audit(authenticated_client)
     response = post(authenticated_client, "/audit/launch", {"mode": "standard", "pack": "pci-cde-isolation",
-                                                            "groups": ["database", "icmp"], "authorized": "yes"})
+                                                            "groups": ["database", "icmp"]})
     assert "/jobs/" in response.headers["Location"] and len(no_worker) == 1
     with app.app_context():
         job = db.session.get(AssessmentJob, no_worker[0])
@@ -229,7 +226,7 @@ def test_own_rules_mix_blocked_and_approved_services(app, authenticated_client, 
         host = db.session.query(Asset).filter_by(address="10.70.0.10").one().id
         cde = next(z.zone_key for z in db.session.query(Zone).all() if z.name == "Card systems")
     response = post(authenticated_client, "/audit/launch", {
-        "mode": "custom", "authorized": "yes",
+        "mode": "custom",
         "r_target": [f"net:{cde}", str(host), str(host)], "r_service": ["db", "ldap", "custom"],
         "r_must": ["deny", "allow", "deny"], "r_protocol": ["tcp", "tcp", "udp"], "r_ports": ["", "", "9999"]})
     assert "/jobs/" in response.headers["Location"], response.headers["Location"]
@@ -243,7 +240,7 @@ def test_own_rules_explain_bad_ports(app, authenticated_client, local, no_worker
     setup_audit(authenticated_client)
     with app.app_context():
         host = str(db.session.query(Asset).filter_by(address="10.70.0.10").one().id)
-    response = post(authenticated_client, "/audit/launch", {"mode": "custom", "authorized": "yes", "r_target": [host],
+    response = post(authenticated_client, "/audit/launch", {"mode": "custom", "r_target": [host],
                                                             "r_service": ["custom"], "r_must": ["deny"], "r_protocol": ["tcp"], "r_ports": ["99999"]})
     page = authenticated_client.get(response.headers["Location"], base_url=BASE).data
     assert b"ports between 1 and 65535" in page and not no_worker
@@ -252,7 +249,7 @@ def test_own_rules_explain_bad_ports(app, authenticated_client, local, no_worker
 def test_blocked_launch_explains_why_and_leaves_nothing_behind(app, authenticated_client, local, no_worker, monkeypatch):
     setup_audit(authenticated_client)
     monkeypatch.setattr("segcheck_web.services.assessment_plan.source_address_available", lambda ip: False)
-    response = post(authenticated_client, "/audit/launch", {"mode": "standard", "pack": "pci-cde-isolation", "authorized": "yes"})
+    response = post(authenticated_client, "/audit/launch", {"mode": "standard", "pack": "pci-cde-isolation"})
     page = authenticated_client.get(response.headers["Location"], base_url=BASE).data
     assert b"not an address of this PC" in page and not no_worker
     with app.app_context():
@@ -265,7 +262,7 @@ def run_audit(app, client, monkeypatch, reachable=()):
     monkeypatch.setattr("segcheck_web.services.assessment_execution.tcp_connect_probe",
                         lambda host, port, timeout, *, source_ip: ProbeOutcome(
                             "reachable" if (host, port) in reachable else "inconclusive", "test", 1.0, source_ip))
-    post(client, "/audit/launch", {"mode": "standard", "pack": "pci-cde-isolation", "groups": ["database"], "authorized": "yes"})
+    post(client, "/audit/launch", {"mode": "standard", "pack": "pci-cde-isolation", "groups": ["database"]})
     run_job(app, started[-1])
     with app.app_context():
         return db.session.get(AssessmentJob, started[-1]).assessment_id
@@ -276,7 +273,8 @@ def test_finished_audit_appears_in_history_and_can_be_deleted(app, authenticated
     first = run_audit(app, authenticated_client, monkeypatch, reachable={("10.30.0.20", 5432)})
     second = run_audit(app, authenticated_client, monkeypatch)
     page = authenticated_client.get("/assessments/", base_url=BASE).data
-    assert b"Violation" in page and b"Unproven" in page and f"#{first}".encode() in page
+    assert b"FAILED" in page and b"NO HOLE FOUND" in page and f"#{first}".encode() in page
+    assert b"1 failed" in page, "the mix of results is shown next to the verdict"
     post(authenticated_client, f"/assessments/{first}/delete", {})
     with app.app_context():
         assert db.session.get(Assessment, first) is None and db.session.get(Assessment, second) is not None
@@ -386,7 +384,7 @@ def test_ports_accept_ranges_and_explain_mistakes():
 def test_own_rules_with_typed_ranges_bundles_and_reasons(app, authenticated_client, local, no_worker):
     setup_audit(authenticated_client)
     response = post(authenticated_client, "/audit/launch", {
-        "mode": "custom", "authorized": "yes",
+        "mode": "custom",
         "r_target": ["text", "text"], "r_service": ["custom", "windows"], "r_must": ["deny", "deny"],
         "r_protocol": ["tcp", "tcp"], "r_ports": ["5432, 8000-8001", ""],
         "r_targets": ["10.30.0.40-41", "10.70.0.10"], "r_reason": ["HR must not reach card data - PCI DSS 1.3.1", ""]})
@@ -405,7 +403,7 @@ def test_own_rules_with_typed_ranges_bundles_and_reasons(app, authenticated_clie
 def test_typed_address_outside_every_network_is_refused(app, authenticated_client, local, no_worker):
     setup_audit(authenticated_client)
     response = post(authenticated_client, "/audit/launch", {
-        "mode": "custom", "authorized": "yes", "r_target": ["text"], "r_service": ["web"], "r_must": ["deny"],
+        "mode": "custom", "r_target": ["text"], "r_service": ["web"], "r_must": ["deny"],
         "r_protocol": ["tcp"], "r_ports": [""], "r_targets": ["192.168.9.9"], "r_reason": [""]})
     page = authenticated_client.get(response.headers["Location"], base_url=BASE).data
     assert b"192.168.9.9 is not inside any network" in page and not no_worker
@@ -420,7 +418,7 @@ def test_rule_reason_is_shown_in_the_report(app, authenticated_client, local, mo
     monkeypatch.setattr("segcheck_web.services.assessment_execution.tcp_connect_probe",
                         lambda host, port, timeout, *, source_ip: ProbeOutcome("inconclusive", "test", 1.0, source_ip))
     post(authenticated_client, "/audit/launch", {
-        "mode": "custom", "authorized": "yes", "r_target": ["text"], "r_service": ["custom"], "r_must": ["deny"],
+        "mode": "custom", "r_target": ["text"], "r_service": ["custom"], "r_must": ["deny"],
         "r_protocol": ["tcp"], "r_ports": ["5432"], "r_targets": ["10.30.0.20"], "r_reason": ["Card data stays isolated <b>"]})
     run_job(app, started[-1])
     with app.app_context():
@@ -434,3 +432,51 @@ def test_example_csv_lists_the_access_matrix_columns(app, authenticated_client):
     assert response.status_code == 200 and response.mimetype == "text/csv"
     assert response.data.decode().splitlines()[0] == ",".join(audit_setup.CSV_FIELDS)
     assert app.test_client().get("/audit/rules-template.csv", base_url=BASE).status_code == 302
+
+
+def test_several_standards_run_once_with_every_mapping(app, authenticated_client, local, no_worker):
+    setup_audit(authenticated_client)
+    response = post(authenticated_client, "/audit/launch", {"mode": "standard", "scope": "several",
+                                                            "pack": ["pci-cde-isolation", "nist-sc7-boundary", "iso-8-22-segregation"],
+                                                            "groups": ["database"]})
+    assert "/jobs/" in response.headers["Location"], response.headers["Location"]
+    with app.app_context():
+        checks = db.session.query(Policy).one().versions[-1].checks
+        keys = [(c.destination_host, tuple(c.ports)) for c in checks]
+        assert len(keys) == len(set(keys)), "each probe is sent once"
+        cde = next(c for c in checks if c.destination_host == "10.30.0.20")
+        frameworks = {m["framework"] for m in cde.framework_mappings}
+        assert frameworks == {"pci_dss", "nist_sp800_53", "iso27002"}
+
+
+def test_several_standards_explains_ones_that_do_not_fit(app, authenticated_client, local, no_worker):
+    setup_audit(authenticated_client)
+    response = post(authenticated_client, "/audit/launch", {"mode": "standard", "scope": "several",
+                                                            "pack": ["pci-cde-egress"]})
+    page = authenticated_client.get(response.headers["Location"], base_url=BASE).data
+    assert b"None of the chosen standards fits" in page and not no_worker
+
+
+def test_rule_export_is_loaded_explained_and_removed(app, authenticated_client, local):
+    setup_audit(authenticated_client, firewall="firewall")
+    bad = post(authenticated_client, "/audit/firewall/rules", {"export_text": "not a rule export"})
+    assert b"Not a rule export" in authenticated_client.get(bad.headers["Location"], base_url=BASE).data
+    good = post(authenticated_client, "/audit/firewall/rules", {"export_text": ":FORWARD DROP [0:0]\n-A FORWARD -s 10.50.0.0/24 -d 10.30.0.20/32 -p tcp -m multiport --dports 5432 -j ACCEPT\n"})
+    page = authenticated_client.get(good.headers["Location"], base_url=BASE).data
+    assert b"loaded 2 Linux FORWARD rule(s)" in page and b"2 rule(s) loaded" in page
+    with app.app_context():
+        assert settings()[1]["ruleset"]["kind"] == "iptables"
+    post(authenticated_client, "/audit/firewall/rules/remove", {})
+    with app.app_context():
+        assert "ruleset" not in settings()[1]
+
+
+@pytest.mark.parametrize("encoding", ["utf-16", "utf-8-sig"])
+def test_rule_export_file_saved_by_windows_powershell_is_read(app, authenticated_client, local, encoding):
+    import io
+    setup_audit(authenticated_client, firewall="firewall")
+    data = ":FORWARD DROP [0:0]\n-A FORWARD -s 10.50.0.0/24 -d 10.30.0.20/32 -p tcp -m multiport --dports 5432 -j ACCEPT\n".encode(encoding)
+    token = get_token(authenticated_client, "/audit/")
+    response = authenticated_client.post("/audit/firewall/rules", data={"csrf_token": token, "export": (io.BytesIO(data), "rules.txt")},
+                                         content_type="multipart/form-data", base_url=BASE, headers={"Referer": BASE + "/audit/"})
+    assert b"loaded 2 Linux FORWARD rule(s)" in authenticated_client.get(response.headers["Location"], base_url=BASE).data

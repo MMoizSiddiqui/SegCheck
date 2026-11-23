@@ -1,6 +1,6 @@
-"""Audit the PaySecure office lab (lab/office) with the guided audit, like an auditor visiting each department.
+"""Audit the PaySecure office lab (lab/) with the guided audit, like an auditor visiting each department.
 
-    cd lab/office && docker compose down && docker compose up -d --build
+    Double-click lab/Reset lab (fresh, with loophole).cmd  (or: docker compose -f lab/docker/docker-compose.yml up -d --build)
     python scripts/e2e_office.py
 
 The lab's "auditor" container plays the department PCs: it has an address in Corporate, Guest, DMZ
@@ -32,8 +32,10 @@ import e2e_audit as e2e  # noqa: E402
 from e2e_audit import Browser, check, flashes, run_to_report, section, verdicts  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
-OFFICE = ROOT / "lab" / "office"
+OFFICE = ROOT / "lab" / "docker"  # where docker-compose.yml is
+LAB = ROOT / "lab"
 BASE = "http://127.0.0.1:5091"
+OFFICE_RUNS = {}
 TOKEN = os.environ.get("SEGCHECK_SETUP_TOKEN", "office-setup-token-change-me-0123456789abcdef")
 TARGETS = [("Card systems", "10.30.0.0/24", "cde", "10.30.0.10 10.30.0.20"), ("HR department", "10.50.0.0/24", "hr", "10.50.0.10"),
            ("Internal servers", "10.70.0.0/24", "server", "10.70.0.10"), ("DMZ public web", "10.60.0.0/24", "dmz", "10.60.0.10")]
@@ -43,6 +45,12 @@ def firewall(mode):
     result = subprocess.run(["docker", "compose", "exec", "-T", "firewall", "/lab/rules.sh", mode], cwd=OFFICE,
                             capture_output=True, text=True, timeout=60, env={**os.environ, "MSYS_NO_PATHCONV": "1"})
     return f"mode: {mode}" in result.stdout
+
+
+def iptables_save():
+    result = subprocess.run(["docker", "compose", "exec", "-T", "firewall", "iptables-save"], cwd=OFFICE,
+                            capture_output=True, text=True, timeout=60)
+    return result.stdout
 
 
 def evidence(report):
@@ -82,8 +90,8 @@ def main():
             password = "Office-" + os.urandom(12).hex()
             browser.request("POST", "/setup", data={"csrf_token": browser.get("/setup").csrf(), "setup_token": TOKEN, "username": "auditor",
                                                     "password": password, "confirm_password": password})
-            (OFFICE / ".office-admin").write_text(f"auditor\n{password}\n", encoding="utf-8")
-        password = (OFFICE / ".office-admin").read_text(encoding="utf-8").splitlines()[1]
+            (LAB / ".office-admin").write_text(f"auditor\n{password}\n", encoding="utf-8")
+        password = (LAB / ".office-admin").read_text(encoding="utf-8").splitlines()[1]
         signed = browser.request("POST", "/login", data={"csrf_token": browser.get("/login").csrf(), "username": "auditor", "password": password})
         check("Auditor signed in", "Overview" in signed.text)
         check("Office firewall at its 'as found' state", firewall("office"))
@@ -104,6 +112,9 @@ def main():
             time.sleep(0.5)
         check("Log listener running on this PC (10.40.0.100:5514)", learned.get("listening") and learned.get("address") == "10.40.0.100:5514", learned)
 
+        loaded = browser.post("/audit/firewall/rules", {"export_text": iptables_save()})
+        check("Step 3: the firewall's rule export (iptables-save) is loaded", "Linux FORWARD rule(s)" in flashes(loaded), flashes(loaded))
+
         section("Corporate PC: Step 4 - PCI DSS CDE isolation")
         report, html = run_to_report(browser, "PCI DSS CDE isolation from Corporate", {"mode": "standard", "pack": "pci-cde-isolation"})
         status = next(iter(browser.get("/audit/firewall/status").json().values()), {})
@@ -113,6 +124,24 @@ def main():
             check("Finding: only the card database on 5432 is reachable (the legacy rule)", fails == {("10.30.0.20", 5432)}, sorted(fails))
             check("The firewall logged that leak as passed", evidence(report).get(("10.30.0.20", 5432)) == {"logged_pass"})
             check("Report verdict: Violation", "Segmentation violation" in html)
+            check("Rule attribution: the report names the firewall rule that let it through (from the firewall log)",
+                  "Let through by firewall rule" in html and "legacy-reporting" in html)
+            attempt = next((a for a in report["boundary_evidence"]["attempts"] if a["host"] == "10.30.0.20" and a["port"] == 5432), {})
+            check("Rule attribution: the rule export points at the same rule (first match in the FORWARD chain)",
+                  (attempt.get("config_rule") or {}).get("label") == "legacy-reporting" and attempt.get("log_rule") == "legacy-reporting",
+                  {k: attempt.get(k) for k in ("log_rule", "config_rule")})
+            check("Verdict per standard: PCI DSS 1.3.1 not met", "Verdict per standard" in html and "PCI DSS 4.0.1: NOT MET" in html)
+            OFFICE_RUNS["corporate-first"] = e2e.RUN_URLS["PCI DSS CDE isolation from Corporate"]
+
+        section("Corporate PC: Step 4 - several standards in one run")
+        packs = ["pci-cde-isolation", "nist-sc7-boundary", "nist-sc7-deny-default", "iso-8-22-segregation", "cis-12-13-filtering"]
+        report, html = run_to_report(browser, "Several standards from Corporate", {"mode": "standard", "scope": "several", "pack": packs})
+        if report:
+            mapped = {m["framework"] for row in report["results"] for m in row.get("framework_mappings", [])}
+            check("One run covers PCI DSS, NIST, ISO and CIS (each probe sent once)", mapped == {"pci_dss", "nist_sp800_53", "iso27002", "cis_controls"}
+                  and len(report["probe_measurement"]["details"]) <= 400, (sorted(mapped), len(report["probe_measurement"]["details"])))
+            check("The assistant gives a verdict for every chosen standard", all(name in html for name in
+                  ("PCI DSS 4.0.1:", "NIST SP 800-53 Rev. 5:", "ISO/IEC 27002:2022:", "CIS Controls v8:")))
 
         section("Corporate PC: Step 4 - own rules (the company's access matrix)")
         ids = host_ids(browser)
@@ -153,6 +182,19 @@ def main():
             check("Checkout reaches the payment API (PASS); the card database stays blocked", got.get("CHK-001") == "PASS"
                   and got.get("CHK-002") == "INCONCLUSIVE", got)
 
+        section("Admin PC (management only through SSH)")
+        here(browser, "Admin network", "management", 80)
+        ids = host_ids(browser)
+        report, html = run_to_report(browser, "Own rules from Admin", {
+            "mode": "custom", "r_target": [ids.get("10.30.0.10"), ids.get("10.30.0.10"), ids.get("10.30.0.20")],
+            "r_service": ["ssh", "custom", "db"], "r_must": ["allow", "deny", "deny"], "r_protocol": ["tcp"] * 3,
+            "r_ports": ["", "8443", ""], "r_reason": ["Approved management service", "", ""]})
+        if report:
+            got = verdicts(report)
+            check("Admin network: SSH to the payment API works (approved); the app port and card DB are blocked",
+                  got == {"CHK-001": "PASS", "CHK-002": "INCONCLUSIVE", "CHK-003": "INCONCLUSIVE"}, got)
+            check("The approved flow is attributed to its allow rule", "admin-ssh-payment-api" in json.dumps(report["boundary_evidence"]))
+
         section("Remediate and retest from Corporate")
         check("Network team removes the legacy rule", firewall("fixed"))
         here(browser, "Corporate staff LAN", "corporate", 40)
@@ -160,10 +202,14 @@ def main():
         if report:
             check("Retest: nothing reachable any more", not any(d["observed"] == "reachable" for d in report["probe_measurement"]["details"]))
             check("Retest: Deny enforced and corroborated by firewall logs", "Deny enforced and corroborated" in html)
+            first = OFFICE_RUNS.get("corporate-first", "").rsplit("/", 1)[-1]
+            retest = e2e.RUN_URLS["Retest PCI DSS CDE isolation from Corporate"].rsplit("/", 1)[-1]
+            diff = browser.get(f"/assessments/compare?a={first}&b={retest}").text
+            check("Compare runs: the retest shows the finding as FIXED with no regression", "FIXED" in diff and "Got worse" not in diff)
 
         section("History")
         history = browser.get("/assessments/").text
-        check("History lists the visit's audits with verdicts", history.count("/delete") >= 6 and "Violation" in history and "Enforced" in history)
+        check("History lists the visit's audits with verdicts", history.count("/delete") >= 8 and "FAILED" in history and "PASSED" in history)
     except Exception as exc:  # noqa: BLE001
         import traceback
         traceback.print_exc()

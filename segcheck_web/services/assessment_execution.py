@@ -9,7 +9,7 @@ import ipaddress
 import json
 import math
 from functools import partial
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from sqlalchemy.exc import IntegrityError
 
@@ -21,6 +21,7 @@ from segcheck.probe import method_probe, probe_points, probe_policy, tcp_connect
 from segcheck_web.extensions import db
 from segcheck_web.models import Assessment, Policy, PolicyVersion, User
 from segcheck_web.services.findings import attach_guidance
+from segcheck_web.services.patience import Patience, RunStopped, RunWatch
 
 
 MAX_WEB_PROBE_ATTEMPTS = 400  # a whole standard in one run; each attempt times out after 1 s
@@ -373,6 +374,37 @@ def _attach_correlated_evidence(report, correlation, policy, source_zone):
     }
 
 
+def _log_readers(environment, source_ip):
+    """(logged_block, any_log_since) for the run, or (None, None) when no log feed was set up in Step 3."""
+    devices = [device for device in (environment or {}).get("devices", []) if device.get("logging")]
+    if not devices:
+        return None, None
+    try:
+        from flask import current_app
+        from segcheck_web.services.firewall_connector import _parse_time, registry
+        connectors = registry(current_app._get_current_object())
+    except RuntimeError:
+        return None, None
+
+    def any_log_since(since):
+        earliest = since - timedelta(seconds=5)
+        return any((_parse_time(event.get("received_at")) or earliest) >= earliest
+                   for device in devices for event in connectors.events_for(device["id"]))
+
+    def logged_block(host, port, protocol, since):
+        earliest = since - timedelta(seconds=1)
+        for device in devices:
+            for event in connectors.events_for(device["id"]):
+                when = _parse_time(event.get("received_at"))
+                if (when is not None and when >= earliest and event.get("action") == "block"
+                        and event.get("destination_ip") == host and event.get("protocol") == protocol
+                        and event.get("source_ip") == source_ip
+                        and (protocol == "icmp" or event.get("destination_port") == port)):
+                    return True
+        return False
+    return logged_block, any_log_since
+
+
 def execute_assessment(
     *,
     policy_id,
@@ -500,8 +532,30 @@ def execute_assessment(
             raise AssessmentExecutionError("Source and target IP families must match") from exc
         if probe_func is not None:
             raise AssessmentExecutionError("A bound assessment cannot override the TCP probe")
-        probe_func = partial(tcp_connect_probe, source_ip=source_ip)
-        protocol_probe = partial(method_probe, source_ip=source_ip)
+        # Answers are final; a silent attempt is tried once more (longer wait, adapted to this network) unless the
+        # firewall's log already shows it blocked that exact attempt. See services/patience.py.
+        logged_block, any_log_since = _log_readers(environment_context, source_ip)
+        patience = Patience(logged_block)
+        # Stops the run early when its setup makes the rest pointless (see patience.RunWatch).
+        logging_device = next((d for d in (environment_context or {}).get("devices", []) if d.get("logging")), {})
+        hint = (f" on UDP port {logging_device.get('log_port')} of {logging_device.get('log_listen_ip') or source_ip}"
+                if logging_device.get("log_port") else "")
+        watch = RunWatch(any_log_since, hint)
+        tcp_once = partial(tcp_connect_probe, source_ip=source_ip)
+        other_once = partial(method_probe, source_ip=source_ip)
+
+        def watched(outcome):
+            try:
+                watch.check(outcome)
+            except RunStopped as exc:
+                raise AssessmentExecutionError(str(exc)[:500]) from exc
+            return outcome
+
+        def probe_func(host, port, timeout):
+            return watched(patience.attempt(lambda wait: tcp_once(host, port, wait), host, port, "tcp"))
+
+        def protocol_probe(protocol, host, port, timeout):
+            return watched(patience.attempt(lambda wait: other_once(protocol, host, port, wait), host, port, protocol))
     else:
         protocol_probe = None
 

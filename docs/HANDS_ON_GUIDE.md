@@ -43,8 +43,8 @@ least once a year that it works. In other words, prove that a PC in HR, Guest Wi
                      ┌─────────────────────────────────────────────┐
                      │ SegCheck compares 1 + 2 with the checks     │
                      │ (Step 4: a standard or your own rules)      │
-                     │ → FAIL / PASS / INCONCLUSIVE per check      │
-                     │ → report: Violation / Enforced / Unproven   │
+                     │ → Failed / Passed / No answer per check     │
+                     │ → verdict: FAILED / PASSED / NO HOLE FOUND  │
                      │ → evidence bundle (.zip with SHA-256 list)  │
                      └─────────────────────────────────────────────┘
 ```
@@ -53,7 +53,7 @@ least once a year that it works. In other words, prove that a PC in HR, Guest Wi
    firewall. SegCheck never relays them: you test the real path.
 2. If a forbidden service **answers**, the boundary has a hole: **FAIL**.
 3. If nothing answers, that alone proves nothing: the firewall may have blocked it, or the service may
-   be switched off. So the result stays **INCONCLUSIVE**. It becomes proof only when the firewall's own
+   be switched off. So the result stays **No answer: not proven**. It becomes proof only when the firewall's own
    log says it blocked exactly that attempt. That is why Step 3 offers to connect the firewall's logs.
 
 ### The four steps
@@ -69,15 +69,17 @@ least once a year that it works. In other words, prove that a PC in HR, Guest Wi
 
 | Per check | Meaning |
 |---|---|
-| **FAIL** | A *must be blocked* service answered: a hole. |
-| **PASS** | A *must work* (approved) service works. |
-| **INCONCLUSIVE** | No answer. Not proof on its own. |
+| **Failed** | A *must be blocked* service answered (or the firewall logged it as passed): a hole. |
+| **Passed** | Blocked and proven by the firewall's log, or a *must work* (approved) service works. |
+| **No answer: not proven** | No answer and no firewall log. Not proof on its own. |
 
 | Report verdict | Meaning |
 |---|---|
-| **Violation** | At least one forbidden path is open. |
-| **Enforced** | Nothing forbidden answered *and* the firewall logged a block for every attempt. Strong evidence. |
-| **Unproven** | Nothing answered, but there are no firewall logs to prove why. |
+| **FAILED** | At least one forbidden path is open. |
+| **ATTENTION** | Nothing forbidden is open, but an approved service is not working. |
+| **PASSED** | Nothing forbidden answered *and* the firewall logged a block for every attempt. Strong evidence. |
+| **NO HOLE FOUND** | Nothing answered, but there are no firewall logs to prove why. |
+| **COULD NOT TEST** | Nothing reached the network; the report says what to fix. |
 
 ---
 
@@ -126,7 +128,7 @@ Ethernet). Name it `Home LAN`, kind **Office / staff PCs**, click **Use this net
 Your router is in the same network as your PC, so use the card **Hosts in your own network**:
 1. Click **Show hosts this PC already knows**. Your router (the gateway) appears; tick it, then **Add
    ticked hosts**. Or type its address (see `ipconfig`) and click **Add hosts**.
-2. Optional: tick *I may ping every address* and click **Ping sweep**. Every device that answers on your
+2. Optional: click **Ping sweep**. Every device that answers on your
    home network is listed (phones, TV, printer…). This shows what discovery does; you don't need to add them.
 
 **Why "own network":** no firewall separates them from your PC, so the standards skip them; your own
@@ -138,7 +140,7 @@ Step 4 opens on **My own rules** (no standard fits a single home network). Add t
    router's admin page").
 2. **+ Another rule** · to the router · **DNS** · must **work (approved)** ("PCs need DNS").
 
-Tick *I have written permission* and **Launch audit**. The live page shows every attempt.
+Click **Launch audit**. The live page shows every attempt.
 
 ### The report
 What we saw on a normal home router (yours may differ):
@@ -177,9 +179,11 @@ the company's rules and logging every decision, and **one hidden misconfiguratio
 
 ### 3.1 Start the lab (fresh)
 1. Start **Docker Desktop** and wait for *Engine running*.
-2. From the SegCheck folder:
+2. **Windows:** double-click `lab\Reset lab (fresh, with loophole).cmd` and wait for *Ready* (it also saves
+   `lab\firewall-rules.txt` for Step 3). How the lab is built, piece by piece: [lab/README.md](../lab/README.md).
+   **Any OS**, from the SegCheck folder:
    ```bash
-   cd lab/office
+   cd lab/docker
    ```
    ```bash
    docker compose down
@@ -204,16 +208,16 @@ client `PaySecure Ltd`.
 | DMZ public web | 10.60.0.0/24 | DMZ / public-facing servers | 10.60.0.10 |
 
 **Step 3:** *There is a firewall*, **Linux (iptables / nftables)**, leave the address empty, keep
-*Connect its logs* ticked, **Save Step 3**. SegCheck picks UDP 5514 and shows the Linux instructions
+*Connect its logs* ticked, **Save firewall choice**. SegCheck picks UDP 5514 and shows the Linux instructions
 (the lab's firewall is already set up that way). After the first audit the status shows *Logs arriving*
 and *Learned the firewall's address from its logs: 10.40.0.1*.
 
 **Step 4:** standard **PCI DSS · CDE isolation from out-of-scope networks**, all probes (50 attempts),
-tick permission, **Launch audit**.
+**Launch audit**.
 
 **What you should find:** one hole. **Card database 10.30.0.20 on 5432 is reachable**, and the firewall
 logged it as **passed**. Verdict **Violation**. Everything else: blocked, and the firewall logged the block.
-That is the hidden *legacy reporting* rule in `lab/office/firewall/rules.sh`.
+That is the hidden *legacy reporting* rule in `lab/docker/firewall/rules.sh`.
 
 **Own rules (the company's access matrix):** **My own rules** with:
 - Public website · Web · must work;
@@ -221,7 +225,7 @@ That is the hidden *legacy reporting* rule in `lab/office/firewall/rules.sh`.
 - HR database · Databases · must be blocked;
 - Payment API · Any remote admin · must be blocked.
 
-Expect PASS, PASS, INCONCLUSIVE, INCONCLUSIVE, each block confirmed by the firewall's log.
+Expect *Passed: works as approved* twice, then *Passed: blocked, proven by firewall log* twice.
 
 ### 3.3 Next department: Guest
 **Step 1:** *Change where you are*, pick `10.20.0.100`, name `Guest Wi-Fi`, kind **Guest or visitor
@@ -259,6 +263,8 @@ Try a mistake: put `192.168.99.5` in `to`. Launch explains that the address is n
 Step 1 or Step 2; add that network in Step 2 first.
 
 ### 3.5 The client fixes the firewall; you prove it
+Windows: double-click `lab\Firewall - fix loophole.cmd` (and `Firewall - add loophole.cmd` to put it back).
+Any OS, in `lab/docker`:
 ```bash
 docker compose exec firewall /lab/rules.sh fixed
 ```
@@ -269,7 +275,7 @@ what an assessor wants (finding → fix → proof). To put the hole back: `docke
 
 ### 3.6 Look at the logic yourself
 - `docker compose logs -f firewall` shows the firewall deciding while you run an audit.
-- `lab/office/firewall/rules.sh`: each `allow` line is an approved flow; `legacy-reporting` is the hole.
+- `lab/docker/firewall/rules.sh`: each `allow` line is an approved flow; `legacy-reporting` is the hole.
 
 ### 3.7 Stop the lab
 ```bash
@@ -322,8 +328,7 @@ else is explained with numbered steps. Try each:
 | Step 2: *Ping sweep* on a /16 | It refuses: at most a /24 |
 | Step 3: firewall logs, while another program uses UDP 5514 | SegCheck picks the next free port and shows it in the instructions |
 | Step 3: firewall logs on, but nothing sends logs for a minute | The usual causes, incl. the Windows Firewall command for an administrator |
-| Step 4: launch without the permission tick | "Tick the authorisation box…" |
-| Step 4: launch while another audit runs | "Another assessment is running…" |
+| Step 4: launch while another audit runs | "Another audit is still running…" (Step 4 shows a banner with a link to it) |
 | Step 4: own rule with port 99999 | "ports between 1 and 65535" |
 | History: Delete everything without typing DELETE | "Type DELETE to confirm" |
 | Wait until a form expires (or sign out in another tab), then submit | **This form expired** |
@@ -337,7 +342,7 @@ else is explained with numbered steps. Try each:
 ```bash
 .venv\Scripts\python.exe -m pytest -q
 ```
-About 470 tests: the four steps, discovery, firewall log parsing and learning (including a real pfSense
+About 600 tests: the four steps, discovery, firewall log parsing and learning (including a real pfSense
 capture), the verdict logic, security (sign-in throttling, CSRF, the database's protection of saved
 reports and the History delete), self-repair and error pages.
 
@@ -360,7 +365,7 @@ results to `reports\`.
 
 | What | How |
 |---|---|
-| Office lab, keep for later | In `lab\office`: `docker compose stop` |
-| Office lab, remove completely | In `lab\office`: `docker compose down`, then delete the `segcheck-office-*` images in Docker Desktop |
+| Office lab, keep for later | Docker Desktop → *segcheck-office* → Stop, or in `lab\docker`: `docker compose stop` |
+| Office lab, remove completely | In `lab\docker`: `docker compose down`, then delete the `segcheck-office-*` images in Docker Desktop |
 | Lab 4 rehearsal | Delete `C:\SegCheckVisit`; make sure `SegCheck-mine` was renamed back |
 | Your own audits | **History → Delete everything** (or delete them one by one) |

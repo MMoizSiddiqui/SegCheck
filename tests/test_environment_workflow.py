@@ -239,7 +239,7 @@ def test_bound_assessment_preserves_environment_and_exports_saved_report(app, au
 
 def test_environment_migration_roundtrip(tmp_path):
     from pathlib import Path
-    migration_dir = str(Path(__file__).resolve().parents[1] / "migrations")
+    migration_dir = str(Path(__file__).resolve().parents[1] / "segcheck_web" / "migrations")
     app = create_app({"TESTING": True, "SECRET_KEY": "migration-test-secret",
                       "SQLALCHEMY_DATABASE_URI": f"sqlite:///{tmp_path / 'environment.sqlite3'}"})
     with app.app_context():

@@ -93,7 +93,7 @@ def test_cancelled_job_message_is_specific(app, authenticated_client, monkeypatc
     with app.app_context():
         job = db.session.get(AssessmentJob, job_id)
         assert job.status == "cancelled"
-        assert "Cancelled by the operator" in job.message and job.assessment_id is None
+        assert "Cancelled by you" in job.message and job.assessment_id is None
 
 
 def test_report_page_shows_scope_observations_and_exports(app, authenticated_client, monkeypatch):
@@ -107,10 +107,11 @@ def test_report_page_shows_scope_observations_and_exports(app, authenticated_cli
     body = page.get_data(as_text=True)
     assert page.status_code == 200
     assert "Environment at execution" in body and "10.20.0.100" in body
-    assert "connection_timeout; not proof" in body  # per-port observation reason
+    # per-port observation reason: a silent attempt was tried twice before being reported as "no reply"
+    assert "connection_timeout; no reply in 2 tries" in body and "not proof" in body
     assert f"/assessments/{assessment_id}/report.json" in body and f"/assessments/{assessment_id}/report.pdf" in body
     assert "Results cover only the rules in this audit" in body and "PCI DSS" not in body.split("<main")[1].split("Technical detail")[0]
-    assert "No reply within 1 second" in body  # every attempt explained in plain words
+    assert "No reply within the wait" in body  # every attempt explained in plain words
     # The environment section is inside <main>, not rendered before the layout.
     assert body.index("<main") < body.index("Environment at execution")
 

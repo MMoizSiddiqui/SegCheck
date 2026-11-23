@@ -1,4 +1,5 @@
 """The firewall log listener explains every problem with its feed and says how to fix it."""
+import os
 import socket
 import time
 
@@ -79,7 +80,9 @@ def test_silence_after_a_minute_lists_the_usual_causes():
         assert listener.status()["advice"] == []  # just started: nothing to say yet
         listener.started -= 61
         tips = " ".join(listener.status()["advice"])
-        assert "remote logging" in tips and "Windows Firewall" in tips and "netsh" in tips
+        assert "remote logging" in tips
+        windows = os.name == "nt"  # the Windows Firewall tip is only given on Windows
+        assert ("Windows Firewall" in tips and "netsh" in tips) == windows
     finally:
         listener.stop()
 

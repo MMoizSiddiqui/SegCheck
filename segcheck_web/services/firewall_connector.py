@@ -17,6 +17,7 @@ UDP syslog is unauthenticated; sender filtering is not cryptographic proof.
 from __future__ import annotations
 
 import ipaddress
+import os
 import json
 import re
 import socket
@@ -28,6 +29,8 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from segcheck.syslog_collector import parse_filterlog
+from segcheck_web.services.rule_attribution import first_match, log_rule_label
+from segcheck_web.services.vendor_logs import parse_vendor_line
 
 MAX_DATAGRAM = 4096
 MAX_EVENTS_PER_DEVICE = 20000
@@ -48,7 +51,7 @@ def _utc_now():
 
 
 def parse_firewall_line(message: str) -> dict | None:
-    """Parse pfSense/OPNsense filterlog or Linux iptables/nftables LOG lines."""
+    """Parse pfSense/OPNsense filterlog, FortiGate, Cisco ASA/FTD, Sophos, MikroTik or Linux iptables/nftables LOG lines."""
     if "filterlog" in message:
         event = parse_filterlog(message)
         fields = event.get("filterlog_fields") or []
@@ -66,6 +69,9 @@ def parse_firewall_line(message: str) -> dict | None:
                 "source_ip": event["source_ip"], "destination_ip": event["destination_ip"],
                 "destination_port": event.get("destination_port"), "interface": event.get("interface"),
                 "rule": event.get("rule_tracker")}
+    vendor = parse_vendor_line(message)  # FortiGate, Cisco ASA/FTD, Sophos, MikroTik
+    if vendor:
+        return vendor
     match = _IPTABLES.search(message)
     if not match:
         return None
@@ -200,12 +206,13 @@ class DeviceListener:
             tips.extend([
                 f"Nothing has arrived for a minute. In the firewall's remote logging, the target must be "
                 f"{self.bind_ip}:{self.port} (UDP) and firewall events must be selected.",
-                "The firewall only sends a log when a rule with logging switched on matches: run an assessment, "
-                "or tick 'Log' on the deny rules.",
-                f"Windows Firewall on this PC may block it. If Windows asked to allow Python, choose Allow. Otherwise "
-                f"ask an administrator to allow inbound UDP {self.port} "
-                f"(netsh advfirewall firewall add rule name=SegCheck-syslog dir=in action=allow protocol=UDP localport={self.port}).",
+                "The firewall only sends a log when a rule with logging switched on matches: run an audit in Step 4 "
+                "(its attempts make the firewall log), or tick 'Log' on the deny rules.",
             ])
+            if os.name == "nt":  # only a Windows PC has Windows Firewall in the way
+                tips.append(f"Windows Firewall on this PC may block it. If Windows asked to allow Python, choose Allow. Otherwise "
+                            f"ask an administrator to allow inbound UDP {self.port} "
+                            f"(netsh advfirewall firewall add rule name=SegCheck-syslog dir=in action=allow protocol=UDP localport={self.port}).")
         return tips
 
     def status(self):
@@ -298,20 +305,55 @@ INTERPRETATION = {
 }
 
 
+# Attempts aimed at one of the firewall's own addresses (ISO 8.20 management plane).
+TO_FIREWALL = {
+    ("inconclusive", "logged_block"): "The firewall confirmed it refused this connection to its own admin port (corroborated).",
+    ("inconclusive", "logged_pass"): "The firewall's rules ACCEPTED this connection to its own address; only because no admin "
+                                     "service answers on this port right now is it not reachable. Restrict it in the firewall's rules.",
+    ("reachable", "logged_pass"): "The firewall accepted this connection and its admin service answered: it can be managed from here.",
+    ("reachable", "logged_block"): "Contradiction: the firewall logged a block, yet its address answered. Check for another device "
+                                   "on that address.",
+    ("inconclusive", "no_matching_log"): "No log line for this attempt to the firewall itself. Make the firewall log what it blocks "
+                                         "for its own addresses (see Step 3b).",
+    ("reachable", "no_matching_log"): "No log line; the firewall's admin service still answered.",
+}
+
+
 def cross_check(details: list[dict], environment: dict, connector: ConnectorRegistry | None, wait=True) -> dict:
     """Match each probe attempt with logged firewall decisions on its path."""
     devices = environment.get("devices", [])
     path_devices = {(detail["source_zone"], detail["destination_zone"]) for detail in details}
     relevant = {device["id"]: device for pair in path_devices for device in devices_on_path(environment, *pair)}
+    owners = {}  # the firewall's own addresses -> that firewall (it decides about traffic to itself, same network or not)
+    for device in devices:
+        for address in [device.get("interface_ip")] + list(device.get("other_ips", [])):
+            if address and device.get("kind") != "none":
+                owners.setdefault(address, []).append(device)
+    for detail in details:
+        for device in owners.get(detail["destination_host"], []):
+            relevant[device["id"]] = device
     statuses = connector.status() if connector else {}
     connected_ids = [device_id for device_id in relevant if statuses.get(device_id, {}).get("listening")]
     if wait and connected_ids:
         time.sleep(LOG_WAIT_SECONDS)  # allow the last syslog datagrams to arrive
+    ruleset = environment.get("ruleset")
     attempts, summary = [], {"logged_block": 0, "logged_pass": 0, "no_matching_log": 0, "not_connected": 0, "same_zone": 0, "contradictions": 0, "open_at_boundary": 0}
     for detail in details:
-        on_path = devices_on_path(environment, detail["source_zone"], detail["destination_zone"])
+        to_device = detail["destination_host"] in owners  # aimed at the firewall itself (management plane)
+        on_path = (owners[detail["destination_host"]] if to_device
+                   else devices_on_path(environment, detail["source_zone"], detail["destination_zone"]))
         record = {"check_id": detail["check_id"], "protocol": detail["protocol"], "host": detail["destination_host"],
                   "port": detail["port"], "observed": detail["observed"], "devices": [device["name"] for device in on_path]}
+        if to_device:
+            record["to_firewall"] = True
+        if ruleset and on_path and detail.get("source_ip"):
+            try:
+                found = first_match(ruleset, detail["source_ip"], detail["destination_host"], detail["protocol"],
+                                    detail["port"] if detail["protocol"] in {"tcp", "udp"} else None, to_device=to_device)
+            except ValueError:
+                found = None
+            if found:
+                record["config_rule"] = found
         if not on_path:
             record.update(evidence="same_zone", interpretation="Source and target are in the same zone; no boundary device applies.")
             summary["same_zone"] += 1
@@ -352,13 +394,17 @@ def cross_check(details: list[dict], environment: dict, connector: ConnectorRegi
             summary["contradictions"] += 1
         if evidence == "logged_pass" and detail["observed"] == "inconclusive":
             summary["open_at_boundary"] += 1
+        decisive = [item for item in matches if item["action"] == {"logged_block": "block", "logged_pass": "pass"}.get(evidence)]
+        labels = list(dict.fromkeys(label for label in (log_rule_label(item, ruleset) for item in decisive) if label))
+        if labels:
+            record["log_rule"] = labels[0] if len(labels) == 1 else ", ".join(labels[:3])
         record.update(evidence=evidence, matched_events=len(matches), sample=matches[:3],
-                      interpretation=INTERPRETATION.get((detail["observed"], evidence), ""))
+                      interpretation=(TO_FIREWALL if to_device else INTERPRETATION).get((detail["observed"], evidence), ""))
         attempts.append(record)
     return {
         "devices": [{"id": device["id"], "name": device["name"], "kind": device.get("kind"),
                      "zones": device.get("zones", []), "connected": device["id"] in connected_ids}
                     for device in relevant.values()],
         "attempts": attempts, "summary": summary,
-        "note": "Supporting evidence only. Firewall logs never change PASS/FAIL/INCONCLUSIVE. UDP syslog is unauthenticated.",
+        "note": "Each attempt matched with the firewall's log: a logged block proves a silent attempt was blocked; a logged pass reveals a hole. UDP syslog is unauthenticated.",
     }

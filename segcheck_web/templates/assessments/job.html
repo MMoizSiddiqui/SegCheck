@@ -41,7 +41,8 @@
             <div class="live-stats live-metrics">
                 <div class="live-stat"><span>Connections measured</span><strong id="job-count">{{ job.completed }} / {{ job.total }}</strong></div>
                 <div class="live-stat"><span>Reachable</span><strong id="reachable-count">{{ job.events|selectattr('observed', 'equalto', 'reachable')|list|length }}</strong></div>
-                <div class="live-stat"><span>Inconclusive</span><strong id="inconclusive-count">{{ job.events|selectattr('observed', 'equalto', 'inconclusive')|list|length }}</strong></div>
+                <div class="live-stat s-pass" title="No reply, and the firewall's own log shows it blocked the attempt"><span>Blocked · in firewall log</span><strong id="logged-count">—</strong></div>
+                <div class="live-stat s-inc" title="No reply and no matching firewall log line (yet): not proven"><span>No reply · not proven</span><strong id="inconclusive-count">—</strong></div>
                 <div class="live-stat"><span>Elapsed</span><strong id="elapsed">—</strong></div>
             </div>
             <progress id="job-progress" max="{{ job.total }}" value="{{ job.completed }}" aria-label="Connection measurements completed"></progress>
@@ -57,7 +58,7 @@
 
 <div class="grid-12">
     <section class="viz-card span-7">
-        <div class="viz-head"><div><span class="section-kicker">PER-ATTEMPT TELEMETRY</span><h2>Connection lanes</h2></div><span class="panel-caption">Bar length = share of the 1 s attempt timeout</span></div>
+        <div class="viz-head"><div><span class="section-kicker">PER-ATTEMPT TELEMETRY</span><h2>Connection lanes</h2></div><span class="panel-caption">Bar length = time waited for an answer (full bar = 1 s or more)</span></div>
         <div class="lanes" id="lanes">
             {% for event in job.events %}
             <div class="lane o-{{ event.observed }}"><span class="lane-idx">{{ '%02d'|format(loop.index) }}</span><span class="lane-target">{{ event.host }}{% if event.protocol == 'icmp' %} · ICMP{% else %}:{{ event.port }}{% if event.protocol == 'udp' %}/udp{% endif %}{% endif %}</span><span class="lane-bar"><span></span></span>{% set plain = explain(event.reason, event.protocol) %}<span class="chip chip-{{ event.observed }}">{{ plain.label }}</span><span class="lane-ms">{{ event.duration_ms }} ms</span><span class="lane-reason">{{ plain.text }}</span></div>

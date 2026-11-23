@@ -18,7 +18,7 @@ from segcheck_web.services.environment import save_asset, save_profile, save_zon
 from segcheck_web.services.policy_import import import_policy_content
 from segcheck_web.services.policy_lifecycle import transition_policy_status
 
-MIGRATIONS = Path(__file__).resolve().parents[1] / "migrations"
+MIGRATIONS = Path(__file__).resolve().parents[1] / "segcheck_web" / "migrations"
 
 
 def form(**values):

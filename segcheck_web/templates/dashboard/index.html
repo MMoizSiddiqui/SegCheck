@@ -50,25 +50,40 @@
 
     <section class="kpi-grid" aria-label="Workspace metrics">
         <article class="metric-card kpi kpi-violet">
-            <span class="kpi-label">Audits</span>
-            <strong class="kpi-value metric-value" data-metric="assessments">{{ assessment_total }}</strong>
-            <span class="kpi-foot metric-foot">Saved reports on this PC</span>
-            <svg class="kpi-spark" id="spark-runs" viewBox="0 0 120 42" preserveAspectRatio="none" aria-hidden="true"></svg>
+            <div class="kpi-top"><span class="kpi-label">Audits</span><span class="kpi-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M7 3h7l4 4v14H7z"/><path d="M14 3v4h4"/><path d="M10 12h5M10 16h5"/></svg></span></div>
+            <div class="kpi-row">
+                <strong class="kpi-value metric-value" data-metric="assessments">{{ assessment_total }}</strong>
+                <svg class="kpi-spark" id="spark-runs" viewBox="0 0 120 42" preserveAspectRatio="none" aria-hidden="true"></svg>
+            </div>
+            <span class="kpi-foot metric-foot">Saved reports on this PC <span class="live-pill" title="Updates every 5 seconds"><i></i>live</span></span>
         </article>
         <article class="metric-card kpi kpi-green">
-            <span class="kpi-label">Networks</span>
-            <strong class="kpi-value metric-value" data-metric="zones">{{ zone_total }}</strong>
-            <span class="kpi-foot metric-foot" id="kpi-cde-foot">This PC's network and the targets</span>
+            <div class="kpi-top"><span class="kpi-label">Latest audit</span><span class="kpi-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="8.5"/><path d="M12 7.5V12l3 2"/></svg></span></div>
+            {% if latest %}
+            <div class="kpi-row"><a class="kpi-verdict tone-{{ latest.tone }}" href="{{ url_for('assessments.assessment_detail', assessment_id=latest.id) }}">{{ latest.word }}</a></div>
+            <span class="kpi-foot metric-foot kpi-latest" title="{{ latest.name }}">#{{ latest.id }} · {{ latest.created_at.strftime('%d %b, %H:%M') }} UTC · {{ latest.title }}</span>
+            {% else %}
+            <div class="kpi-row"><span class="kpi-verdict tone-unproven">No audit yet</span></div>
+            <span class="kpi-foot metric-foot">Run one from New audit, Step 4</span>
+            {% endif %}
         </article>
         <article class="metric-card kpi kpi-rose">
-            <span class="kpi-label">Target hosts</span>
-            <strong class="kpi-value metric-value" data-metric="assets">{{ asset_total }}</strong>
-            <span class="kpi-foot metric-foot">Systems the audit tests</span>
+            <div class="kpi-top"><span class="kpi-label">Current setup</span><span class="kpi-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="5" r="2.2"/><circle cx="5" cy="18" r="2.2"/><circle cx="19" cy="18" r="2.2"/><path d="M12 7.2v4.3M12 11.5 6.4 16.2M12 11.5l5.6 4.7"/></svg></span></div>
+            <div class="kpi-row kpi-pair">
+                <span><strong class="kpi-value metric-value" data-metric="zones">{{ zone_total }}</strong><small>networks</small></span>
+                <span><strong class="kpi-value metric-value" data-metric="assets">{{ asset_total }}</strong><small>hosts</small></span>
+            </div>
+            <span class="kpi-foot metric-foot">{{ setup.cde }} card network{{ '' if setup.cde == 1 else 's' }} (CDE){% if setup.here %} · this PC in {{ setup.here }}{% endif %} · <a href="{{ url_for('audit.page') }}#step-2">edit in Step 2</a></span>
         </article>
         <article class="metric-card kpi">
-            <span class="kpi-label">Check results</span>
-            <strong class="kpi-value metric-value">{{ result_totals.total }}</strong>
-            <span class="kpi-foot metric-foot">{{ result_totals.fail }} fail · {{ result_totals.pass }} pass · {{ result_totals.inconclusive }} inconclusive</span>
+            <div class="kpi-top"><span class="kpi-label">Check results</span><span class="kpi-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 20V10M10 20V4M16 20v-7M22 20H2"/></svg></span></div>
+            <div class="kpi-row"><strong class="kpi-value metric-value" data-results="total">{{ result_totals.total }}</strong></div>
+            <div class="kpi-bar" data-results-bar data-fail="{{ result_totals.fail }}" data-pass="{{ result_totals.pass }}"
+                 data-inconclusive="{{ result_totals.inconclusive }}" role="img"
+                 aria-label="{{ result_totals.fail }} failed, {{ result_totals.pass }} passed, {{ result_totals.inconclusive }} no answer">
+                <span class="seg-fail"></span><span class="seg-pass"></span><span class="seg-inconclusive"></span></div>
+            <span class="kpi-foot metric-foot kpi-legend" data-results-foot>across all saved audits: <b class="t-fail">{{ result_totals.fail }}</b> failed ·
+                <b class="t-pass">{{ result_totals.pass }}</b> passed · <b class="t-inconclusive">{{ result_totals.inconclusive }}</b> no answer</span>
         </article>
     </section>
 
@@ -76,13 +91,13 @@
         <article class="viz-card span-5" aria-labelledby="posture-title">
             <div class="viz-head"><div><span class="section-kicker">SEGMENTATION POSTURE</span><h2 id="posture-title">Checks meeting expectation</h2></div><span class="chip chip-info">Latest 60 runs</span></div>
             <div class="posture">
-                <svg id="posture-gauge" viewBox="0 0 230 230" role="img" aria-label="Share of exercised checks that met their expected behaviour">
+                <div class="gauge-wrap"><svg id="posture-gauge" viewBox="0 0 230 230" role="img" aria-label="Share of exercised checks that met their expected behaviour">
                     <circle class="gauge-track" cx="115" cy="115" r="88" pathLength="100" stroke-dasharray="75 100" transform="rotate(135 115 115)"/>
                     <circle id="gauge-value" class="gauge-value is-empty" cx="115" cy="115" r="88" pathLength="100" stroke-dasharray="0 100" transform="rotate(135 115 115)"/>
                     <text id="gauge-number" class="gauge-number" x="115" y="118" text-anchor="middle">—</text>
                     <text class="gauge-caption" x="115" y="142" text-anchor="middle">PASS RATE</text>
-                    <text id="gauge-sub" class="gauge-caption" x="115" y="196" text-anchor="middle">of exercised checks</text>
                 </svg>
+                <p class="gauge-note"><span id="gauge-sub">of exercised checks</span><span id="gauge-sub2"></span></p></div>
                 <div class="posture-legend" id="posture-legend">
                     <p class="muted small">Complete an authorised assessment to measure posture.</p>
                 </div>

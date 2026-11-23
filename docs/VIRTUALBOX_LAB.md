@@ -77,9 +77,9 @@ Run as the normal `kali` user, **not root**. The browser opens http://127.0.0.1:
 1. **Step 1 · Where you are:** SegCheck lists `eth0 · 10.20.0.100 · 10.20.0.0/24 · gateway 10.20.0.1` and
    picks it. Name `Guest`, kind **Guest or visitor Wi-Fi** → **Use this network**.
 2. **Step 2 · What to test:** one row: name `CDE`, network `10.30.0.0/24`, kind **Card data environment
-   (CDE)**, hosts `10.30.0.10` → **Save target networks**.
+   (CDE)**, hosts `10.30.0.10` → **Add these networks**.
 3. **Step 3 · Firewall:** *There is a firewall*, **pfSense or OPNsense**, address `10.20.0.1` (pre-filled
-   from the gateway), *Connect its logs* ticked → **Save Step 3**. The page shows the port (5514 unless it
+   from the gateway), *Connect its logs* ticked → **Save firewall choice**. The page shows the port (5514 unless it
    is taken) and the exact pfSense settings with `10.20.0.100:5514` filled in.
 
 | Check | Expected |
@@ -94,7 +94,7 @@ target 10.20.0.100:5514, the rule's **Log** box, Windows/Kali firewall).
 
 1. pfSense: enable the **pass** rule (open state). Apply.
 2. **Step 4:** standard **PCI DSS · CDE isolation from out-of-scope networks**, all probes (25 attempts),
-   tick permission → **Launch audit**.
+   **Launch audit**.
 
 | Check | Expected |
 |---|---|
@@ -112,11 +112,11 @@ target 10.20.0.100:5514, the rule's **Log** box, Windows/Kali firewall).
 
 | Check | Expected |
 |---|---|
-| Results | **All INCONCLUSIVE** (silence is never a PASS) |
+| Results | **All Passed: blocked, proven by firewall log** (silence alone is never a pass; the logged block proves it) |
 | Executive summary | **DENY ENFORCED · Deny enforced and corroborated by firewall logs** |
 | Boundary cross-check | **Block confirmed = 25** (or close: see note) |
 | Control matrix | PCI DSS 11.4.5 / 1.3.1 → **Supported** |
-| History | Both audits listed: Violation (Act 1), Enforced (Act 2) |
+| History | Both audits listed: FAILED (Act 1), PASSED (Act 2) |
 
 Note: pfSense must log every blocked packet. If a few attempts show "no log match", check the rule's Log
 box and that the GUEST interface's default block rule isn't catching them unlogged.
@@ -124,8 +124,9 @@ box and that the GUEST interface's default block rule isn't catching them unlogg
 ## 7. Extras (optional)
 
 - **Untrusted standard:** Step 4 → *Untrusted/DMZ networks to CDE*: same expectations.
-- **Firewall management plane:** Step 4 → *ISO 27002 8.20*: probes 10.20.0.1 on 22/80/443/161. If the
-  pfSense web GUI is reachable from GUEST, it reports **FAIL**: a real finding.
+- **Firewall management plane:** Step 4 → *ISO 27002 8.20*: probes 10.20.0.1 on 22/80/443/161, plus the
+  firewall's other addresses if you list them in Step 3a (*Its addresses in the other networks*). If the pfSense
+  web GUI is reachable from GUEST on any of them, it reports **FAIL**: a real finding.
 - **Probe choice:** untick everything but *Databases* and watch the attempt count change before launch.
 - **Cancellation:** launch and press *Cancel remaining attempts*: the run stops, no report is saved.
 
@@ -139,7 +140,7 @@ as evidence.
 
 | Symptom | Fix |
 |---|---|
-| Step 4 "Not ready yet: … Declare the boundary…" | Save Step 3 (firewall or *No firewall*) |
+| Step 4 "Not ready yet: … Declare the boundary…" | Save firewall choice (firewall or *No firewall*) |
 | Step 1 "… is not an address of this PC" | Kali's IP isn't 10.20.0.100; fix the VM's address or pick the detected network |
-| Step 3 "UDP port 5514 is already used…" | Save Step 3 again: SegCheck picks the next free port; set that port in pfSense |
-| Everything INCONCLUSIVE in Act 1 | The pass rule isn't applied, or CDE services aren't listening (`ss -tulpn`) |
+| Step 3 "UDP port 5514 is already used…" | Save firewall choice again: SegCheck picks the next free port; set that port in pfSense |
+| Everything *No answer* in Act 1 | The pass rule isn't applied, or CDE services aren't listening (`ss -tulpn`) |

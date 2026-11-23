@@ -29,8 +29,8 @@ def build_plan(version, policy_status, *, check_local_address=True):
     if not environment.get("organization") or not source_ip or not source_zone:
         blockers.append("Complete the organisation and local probe configuration.")
     elif check_local_address and not source_address_available(source_ip):
-        blockers.append("The configured probe IP is not an address of this PC. Click 'Use this PC as the probe' "
-                        "(Network environment), or enter this PC's address (see ipconfig).")
+        blockers.append("The Step 1 address is not an address of this PC any more (another network?). "
+                        "Open Step 1 and pick one of the networks this PC is in now.")
     # Assets are matched by explicit address AND declared destination zone.
     inventory = {(asset.address, zone.zone_key) for asset, zone in
                  db.session.query(Asset, Zone).join(Zone, Asset.zone_id == Zone.id).all()}
@@ -50,8 +50,8 @@ def build_plan(version, policy_status, *, check_local_address=True):
         path_devices = [device for device in environment.get("devices", [])
                         if check.source_zone in device.get("zones", []) and check.destination_zone in device.get("zones", [])]
         if selected and check.source_zone != check.destination_zone and not path_devices:
-            reasons.append(f"Declare the boundary between {check.source_zone} and {check.destination_zone} "
-                           "(firewall, router, or 'none / unknown') in Network environment.")
+            reasons.append(f"Do Step 3 (Firewall): say what is between {check.source_zone} and {check.destination_zone} "
+                           "('There is a firewall' or 'No firewall, or I don't know').")
         network = environment.get("networks", {}).get(check.destination_zone)
         if network is None or ipaddress.ip_address(check.destination_host) not in ipaddress.ip_network(network["cidr"]):
             reasons.append("Target is outside the configured destination subnet.")

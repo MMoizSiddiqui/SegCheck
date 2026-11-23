@@ -21,7 +21,7 @@ from segcheck_web.models import (
 )
 
 
-MIGRATIONS_DIR = Path(__file__).resolve().parents[1] / "migrations"
+MIGRATIONS_DIR = Path(__file__).resolve().parents[1] / "segcheck_web" / "migrations"
 
 EXPECTED_TRIGGERS = {
     "trg_policy_versions_immutable_update",

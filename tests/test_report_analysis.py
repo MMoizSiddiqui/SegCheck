@@ -121,7 +121,7 @@ def test_report_page_and_pdf_contain_analyst_sections(app, authenticated_client,
         record = db.session.get(Assessment, assessment_id)
         pdf = generate_assessment_pdf(record)
     text = _pdf_text(pdf)
-    for marker in (b"Executive summary", b"Result in plain words", b"FAILED", b"ACTION REQUIRED", b"Control matrix", b"Method coverage heatmap", b"Check results and analyst guidance", b"Appendix: complete saved record"):
+    for marker in (b"Executive summary", b"Result in plain words", b"FAILED", b"ACTION REQUIRED", b"Control matrix", b"Method coverage heatmap", b"Check results and analyst guidance", b"Appendix: audit trail", b"SHA-256 of the JSON file"):
         assert marker in text
     assert len(re.findall(rb"/Type /Page\b(?!s)", pdf)) <= 12
 
@@ -170,5 +170,5 @@ def test_allowed_flows_do_not_hide_an_enforced_deny_and_outages_are_findings():
     down = {**base, "results": [row("A1", "INCONCLUSIVE", expected="allow"), row("D1", "INCONCLUSIVE")],
             "boundary_evidence": evidence(("A1", "logged_block"), ("D1", "logged_block"))}
     analysis = analyse(down, {"cde": {"role": "cde"}})
-    assert analysis["status"] == "enforced" and analysis["counts"]["allowed_down"] == 1
+    assert analysis["status"] == "attention" and analysis["counts"]["allowed_down"] == 1  # matches the top verdict
     assert any("Approved flow not working" in finding["text"] for finding in analysis["findings"])

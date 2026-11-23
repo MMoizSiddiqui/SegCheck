@@ -55,7 +55,7 @@ def test_unexpected_crash_shows_reference_and_logs_it(tmp_path):
         raise RuntimeError("boom secret detail")
     response = application.test_client().get("/test-crash", base_url=BASE)
     assert response.status_code == 500
-    assert b"Something went wrong inside SegCheck" in response.data and b"Reference:" in response.data
+    assert b"SegCheck hit a problem it did not expect" in response.data and b"not something you did wrong" in response.data and b"Reference:" in response.data
     assert b"boom secret detail" not in response.data and b"Traceback" not in response.data
     log = (tmp_path / "logs" / "errors.log").read_text(encoding="utf-8")
     assert "boom secret detail" in log and "incident" in log

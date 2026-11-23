@@ -14,14 +14,14 @@
   function layout(run) {
     const zones = run.zones || [];
     const rows = zones.reduce((sum, zone) => sum + Math.max(1, Math.ceil(zone.hosts.length / 3)) + 1, 0);
-    const H = Math.max(260, 60 + rows * 46);
+    const H = Math.max(260, 60 + rows * 60);  // rows leave room for the "OPEN: …" label under a failing host
     const positions = {};
     let y = 30;
     const boxes = zones.map(zone => {
       const lines = Math.max(1, Math.ceil(zone.hosts.length / 3));
-      const box = { zone, x: 520, y, w: 360, h: 40 + lines * 46 };
+      const box = { zone, x: 520, y, w: 360, h: 46 + lines * 60 };
       zone.hosts.forEach((host, index) => {
-        positions[host.ip] = { x: box.x + 60 + (index % 3) * 110, y: box.y + 52 + Math.floor(index / 3) * 46 };
+        positions[host.ip] = { x: box.x + 60 + (index % 3) * 110, y: box.y + 52 + Math.floor(index / 3) * 60 };
       });
       y += box.h + 16;
       return box;
@@ -50,7 +50,23 @@
     for (const tone of ["fail", "pass", "unproven", "skipped"]) {
       const item = el("span", `lg lg-${tone}`); item.append(el("i"), document.createTextNode(TONE_TEXT[tone])); legend.append(item);
     }
-    container.append(toolbar, map, legend, panel);
+    // Alarm strip: what needs attention, before anyone reads the map.
+    const hosts = (run.zones || []).flatMap(zone => zone.hosts);
+    const openPorts = {};
+    for (const attempt of run.attempts || []) {
+      if (attempt.observed === "reachable") {
+        const what = attempt.protocol === "icmp" ? "ping" : `${attempt.protocol.toUpperCase()} ${attempt.port}`;
+        (openPorts[attempt.host] = openPorts[attempt.host] || []).push(what);
+      }
+    }
+    const tally = tone => hosts.filter(host => host.tone === tone).length;
+    const strip = el("div", "segmap-alerts");
+    const open = tally("fail"), proven = tally("pass"), unproven = tally("unproven");
+    if (open) strip.append(el("span", "alert-pill is-fail", `⚠ ${open} host${open === 1 ? "" : "s"} with an open path`));
+    if (proven) strip.append(el("span", "alert-pill is-pass", `✓ ${proven} blocked and proven`));
+    if (unproven) strip.append(el("span", "alert-pill is-unproven", `? ${unproven} not proven (no firewall log)`));
+    if (!open && !unproven && proven) strip.append(el("span", "alert-pill is-calm", "All clear on every tested path"));
+    container.append(strip, toolbar, map, legend, panel);
 
     // This PC
     const pcGroup = svg("g", { class: "segmap-pc" });
@@ -90,12 +106,29 @@
       for (const host of zone.hosts) {
         const p = positions[host.ip];
         const midX = (pc.x + 90 + p.x) / 2;
-        const path = svg("path", { d: `M${pc.x + 90},${pc.y} C${midX},${pc.y} ${midX},${p.y} ${p.x - 16},${p.y}`, class: `segmap-edge tone-${host.tone}` });
+        const path = svg("path", { d: `M${pc.x + 90},${pc.y} C${midX},${pc.y} ${midX},${p.y} ${p.x - 16},${p.y}`,
+          class: `segmap-edge tone-${host.tone}${host.tone === "fail" ? " is-alarm" : ""}` });
         edges.append(path);
         lines[host.ip] = path;
+        if (host.tone === "pass" || host.tone === "unproven") {
+          // A short bar where the path meets the network's boundary: stopped there (proven when green).
+          const length = path.getTotalLength();
+          let point = path.getPointAtLength(length * 0.86);
+          for (let t = 0.5; t <= 0.98; t += 0.01) { const q = path.getPointAtLength(length * t); if (q.x >= box.x - 6) { point = q; break; } }
+          edges.append(svg("line", { x1: point.x, y1: point.y - 9, x2: point.x, y2: point.y + 9, class: `segmap-stop tone-${host.tone}` }));
+        }
         const dot = svg("g", { class: `segmap-host tone-${host.tone}`, tabindex: "0", role: "button", "aria-label": `${host.ip}: ${TONE_TEXT[host.tone]}` });
+        if (host.tone === "fail") {
+          dot.append(svg("circle", { cx: p.x, cy: p.y, r: 14, class: "alarm-ring" }), svg("circle", { cx: p.x, cy: p.y, r: 14, class: "alarm-ring is-late" }));
+        }
         dot.append(svg("circle", { cx: p.x, cy: p.y, r: 14 }), svg("text", { x: p.x, y: p.y + 30, "text-anchor": "middle", class: "segmap-ip" }, host.ip));
-        if (host.tone === "fail") dot.append(svg("text", { x: p.x, y: p.y + 5, "text-anchor": "middle", class: "segmap-bang" }, "!"));
+        const badge = { fail: "!", pass: "✓", unproven: "?" }[host.tone];
+        if (badge) dot.append(svg("text", { x: p.x, y: p.y + 5, "text-anchor": "middle", class: `segmap-badge tone-${host.tone}` }, badge));
+        if (host.tone === "fail" && openPorts[host.ip]) {
+          const list = [...new Set(openPorts[host.ip])];
+          dot.append(svg("text", { x: p.x, y: p.y + 45, "text-anchor": "middle", class: "segmap-open", fill: "#ff6b6b" },
+            `OPEN: ${list.slice(0, 3).join(", ")}${list.length > 3 ? ` +${list.length - 3}` : ""}`));
+        }
         dot.addEventListener("click", () => select(host, zone));
         dot.addEventListener("keydown", event => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); select(host, zone); } });
         nodes.append(dot);
@@ -112,13 +145,23 @@
       const attempts = run.attempts.filter(a => lines[a.host]);
       if (!attempts.length) return;
       for (const dot of Object.values(dots)) dot.classList.add("is-pending");
+      container.classList.add("is-replaying");   // no red until the attempt that gets through is reached
+      for (const node of container.querySelectorAll(".is-revealed")) node.classList.remove("is-revealed");
+      const found = [];
       const step = Math.max(40, Math.min(450, 12000 / attempts.length));
       let index = 0, timer = null, stopped = false;
+      const announced = new Set();
       replay.textContent = "■ Stop";
+      status.classList.remove("is-alarm");
       const finish = () => {
         stopped = true; clearTimeout(timer); packets.replaceChildren();
-        for (const dot of Object.values(dots)) dot.classList.remove("is-pending", "flash-reached", "flash-silent");
-        replay.textContent = "▶ Replay attempts"; status.textContent = `${run.attempts.length} attempts · replay finished`; playing = null;
+        container.classList.remove("is-replaying");
+        for (const dot of Object.values(dots)) dot.classList.remove("is-pending", "flash-reached", "flash-silent", "is-alerting");
+        replay.textContent = "▶ Replay attempts"; playing = null;
+        status.textContent = found.length
+          ? `Replay finished: ${found.length} hole${found.length === 1 ? "" : "s"} found — ${found.slice(0, 4).join(" · ")}${found.length > 4 ? " …" : ""}`
+          : `Replay finished: ${run.attempts.length} attempts, nothing got through`;
+        status.classList.toggle("is-alarm", Boolean(found.length));
       };
       playing = { stop: finish };
       const next = () => {
@@ -140,10 +183,18 @@
         requestAnimationFrame(move);
         const target = dots[attempt.host];
         target.classList.remove("is-pending");
-        target.classList.toggle("flash-reached", attempt.observed === "reachable");
+        if (!target.classList.contains("tone-fail")) { target.classList.add("is-revealed"); line.classList.add("is-revealed"); }  // blocked hosts show their colour once tried
         target.classList.toggle("flash-silent", attempt.observed !== "reachable");
         const what = attempt.protocol === "icmp" ? "ping" : `${attempt.protocol.toUpperCase()} ${attempt.port}`;
         status.textContent = `Attempt ${index}/${attempts.length}: ${what} → ${attempt.host} · ${attempt.label}`;
+        if (attempt.observed === "reachable" && !announced.has(`${attempt.host}|${what}`)) {
+          announced.add(`${attempt.host}|${what}`);
+          found.push(`${attempt.host} · ${what}`);
+          target.classList.add("is-revealed", "is-alerting");
+          line.classList.add("is-revealed");
+          status.classList.add("is-alarm");
+          if (UI.toast) UI.toast(`Hole found: ${attempt.host} answered on ${what}. Something that must be blocked got through.`, "error");
+        }
         timer = setTimeout(next, step);
       };
       next();

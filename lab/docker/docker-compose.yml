@@ -1,10 +1,10 @@
 # PaySecure Ltd office network: a realistic multi-department segmentation lab for SegCheck.
 #
-#   Guest 10.20 · Corporate 10.40 · HR 10.50 · DMZ 10.60 · Servers 10.70 · CDE 10.30   (each /24)
+#   Guest 10.20 · Corporate 10.40 · HR 10.50 · DMZ 10.60 · Servers 10.70 · CDE 10.30 · Admin 10.80   (each /24)
 #   One core firewall (x.x.x.1 on every zone) enforces the access matrix in firewall/rules.sh
 #   and logs every decision (NFLOG → ulogd → syslog) to SegCheck at 10.40.0.100:5514.
 #
-#   SegCheck runs on an audit host with an address in Guest, Corporate, DMZ and CDE
+#   SegCheck runs on an audit host with an address in Guest, Corporate, DMZ, CDE and Admin
 #   (policy routing sends each source address through the firewall), like an auditor moving
 #   a test laptop between VLANs. UI: http://127.0.0.1:5091
 #
@@ -12,7 +12,7 @@
 name: segcheck-office
 
 x-zone-service: &zone-service
-  build: ./service
+  build: ./systems
   cap_add: [NET_ADMIN]
   depends_on: [firewall]
 
@@ -23,6 +23,7 @@ networks:
   dmz: {ipam: {config: [{subnet: 10.60.0.0/24, gateway: 10.60.0.254}]}}
   servers: {ipam: {config: [{subnet: 10.70.0.0/24, gateway: 10.70.0.254}]}}
   cde: {ipam: {config: [{subnet: 10.30.0.0/24, gateway: 10.30.0.254}]}}
+  admin: {ipam: {config: [{subnet: 10.80.0.0/24, gateway: 10.80.0.254}]}}
 
 services:
   firewall:
@@ -37,6 +38,7 @@ services:
       dmz: {ipv4_address: 10.60.0.1}
       servers: {ipv4_address: 10.70.0.1}
       cde: {ipv4_address: 10.30.0.1}
+      admin: {ipv4_address: 10.80.0.1}
 
   hr-db:
     <<: *zone-service
@@ -62,10 +64,10 @@ services:
   auditor:
     build:
       context: ../..
-      dockerfile: lab/Dockerfile.probe
-    entrypoint: ["/lab/office-entry.sh"]
+      dockerfile: lab/docker/auditor/Dockerfile
+    entrypoint: ["/lab/auditor-entry.sh"]
     cap_add: [NET_ADMIN]
-    volumes: ["./auditor-entry.sh:/lab/office-entry.sh:ro"]
+    volumes: ["./auditor/entry.sh:/lab/auditor-entry.sh:ro"]
     ports: ["127.0.0.1:5091:5000"]
     environment:
       SEGCHECK_CONTAINER: "1"
@@ -75,4 +77,5 @@ services:
       corporate: {ipv4_address: 10.40.0.100}
       dmz: {ipv4_address: 10.60.0.100}
       cde: {ipv4_address: 10.30.0.100}
+      admin: {ipv4_address: 10.80.0.100}
     depends_on: [firewall]

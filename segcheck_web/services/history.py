@@ -15,7 +15,7 @@ from sqlalchemy import text
 from segcheck_web.extensions import db
 from segcheck_web.models import Assessment, Policy, PolicyVersion
 from segcheck_web.models.jobs import AssessmentJob, AssessmentLease
-from segcheck_web.services.report_analysis import analyse
+from segcheck_web.services.report_view import build as plain_view
 
 ACTIVE = {"queued", "running"}
 
@@ -30,12 +30,16 @@ def audits(actor_id=None):
     for record in db.session.query(Assessment).order_by(Assessment.created_at.desc(), Assessment.id.desc()).all():
         report = record.report if isinstance(record.report, dict) else {}
         environment = (report.get("assessment") or {}).get("environment") or {}
-        verdict = analyse(report, environment.get("networks") or {})
+        view = plain_view(report)  # the same verdict words as the report itself (worst result wins)
+        verdict, counts = view["verdict"], view["counts"]
+        mix = " · ".join(part for part in (f"{counts['failed']} failed" if counts["failed"] else "",
+                                           f"{counts['passed']} passed" if counts["passed"] else "",
+                                           f"{counts['unproven']} not proven" if counts["unproven"] else "") if part)
         policy = db.session.get(Policy, record.policy_id)
         rows.append({"kind": "report", "id": record.id, "name": policy.name if policy else f"Audit {record.id}",
                      "created_at": record.created_at, "source_zone": record.source_zone,
-                     "source_ip": environment.get("source_ip", ""), "status": verdict["status"],
-                     "headline": verdict["headline"], "counts": verdict["counts"]})
+                     "source_ip": environment.get("source_ip", ""), "status": verdict["tone"], "word": verdict["word"],
+                     "headline": f"{verdict['title']}" + (f" · {mix}" if mix else ""), "counts": counts})
     unfinished = (db.session.query(AssessmentJob).filter(AssessmentJob.assessment_id.is_(None))
                   .order_by(AssessmentJob.created_at.desc()).all())
     for job in unfinished:

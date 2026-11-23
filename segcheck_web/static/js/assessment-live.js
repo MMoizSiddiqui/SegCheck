@@ -23,7 +23,11 @@
   const page = document.querySelector("#live-assessment");
   let glossary = [];
   try { glossary = JSON.parse(page?.dataset.reasons || "[]"); } catch (error) { glossary = []; }
+  const LOGGED = "blocked by the firewall (its log shows it)";
   function plain(reason) {
+    if (String(reason || "").includes(LOGGED)) {
+      return { label: "Blocked (logged)", text: "No reply, and the firewall's own log shows it blocked this attempt: blocked, and proven." };
+    }
     const code = String(reason || "").split(";")[0].trim();
     const hit = glossary.find(([prefix]) => code.startsWith(prefix));
     return hit ? { label: hit[1], text: hit[2] } : { label: code.replace(/_/g, " "), text: "" };
@@ -59,9 +63,13 @@
     const group = $("#radar-blips");
     group.replaceChildren();
     events.forEach((event, index) => {
+      // One track at radius 100, between the counter in the middle and the progress ring: dots never cover the text.
+      // Dot size follows the number of attempts so they stay apart (5 px for a few, down to 1.6 px for 400).
       const angle = (index / total) * Math.PI * 2 - Math.PI / 2;
-      const radius = event.observed === "reachable" ? 52 : 84;
-      const dot = UI.svg("circle", { cx: 130 + Math.cos(angle) * radius, cy: 130 + Math.sin(angle) * radius, r: 5,
+      const radius = 100;
+      const size = Math.max(1.6, Math.min(5, (Math.PI * radius / Math.max(1, total)) * 0.8));
+      const open = event.observed === "reachable";
+      const dot = UI.svg("circle", { cx: 130 + Math.cos(angle) * radius, cy: 130 + Math.sin(angle) * radius, r: open ? Math.min(6, size + 1.5) : size,
         fill: event.observed === "reachable" ? "#f0915f" : "#fbbf3c", class: "radar-blip" });
       dot.append(UI.svg("title", {}, `${event.host}:${event.port} · ${event.observed}`));
       group.append(dot);
@@ -81,7 +89,12 @@
     $("#job-status").textContent = status.toUpperCase();
     $("#job-status").dataset.state = status;
     $("#job-status").className = `live-indicator chip ${status === "completed" ? "chip-pass" : active.has(status) ? "chip-info" : status === "cancelled" ? "chip-idle" : "chip-fail"}`;
-    $("#job-heading").textContent = HEADINGS[status] || "Assessment in progress";
+    $("#job-heading").textContent = status === "failed" && String(data.message || "").startsWith("Stopped early")
+      ? "Stopped early: fix the setup and run again" : (HEADINGS[status] || "Assessment in progress");
+    if (status === "failed" && String(data.message || "").startsWith("Stopped early")) {
+      $("#job-status").textContent = "Stopped";
+      $("#job-status").className = "live-indicator chip chip-inconclusive";
+    }
     $("#job-count").textContent = `${data.completed} / ${data.total}`;
     $("#job-progress").value = data.completed;
     $("#job-message").textContent = data.message;
@@ -89,7 +102,11 @@
     $("#progress-ring").setAttribute("stroke-dashoffset", String(100 - data.completed / Math.max(1, data.total) * 100));
     $("#live-card").classList.toggle("is-running", active.has(status));
     UI.countTo($("#reachable-count"), data.events.filter(e => e.observed === "reachable").length, { duration: 400 });
-    UI.countTo($("#inconclusive-count"), data.events.filter(e => e.observed === "inconclusive").length, { duration: 400 });
+    // Silence is split live: blocks the firewall logged (proven) and replies that are still missing (not proven yet).
+    const silent = data.events.filter(e => e.observed === "inconclusive");
+    const logged = silent.filter(e => String(e.reason || "").includes(LOGGED)).length;
+    UI.countTo($("#logged-count"), logged, { duration: 400 });
+    UI.countTo($("#inconclusive-count"), silent.length - logged, { duration: 400 });
     for (const event of data.events.slice(seen)) {
       log(`${(event.protocol || "tcp").toUpperCase()} ${event.host}${event.protocol === "icmp" ? "" : ":" + event.port} → ${plain(event.reason).label}: ${plain(event.reason).text || event.reason || ""} (${event.duration_ms} ms)`, event.observed === "reachable" ? "t-ok" : "t-warn");
     }
@@ -111,12 +128,23 @@
     if (document.hidden) { setTimeout(poll, 1500); return; }
     try {
       const response = await fetch(root.dataset.statusUrl, { credentials: "same-origin", cache: "no-store", headers: { Accept: "application/json" } });
-      if (!response.ok || !response.headers.get("content-type")?.includes("application/json")) { finished = true; throw new Error("Progress unavailable. Reload to check your session."); }
+      if (response.redirected || !response.headers.get("content-type")?.includes("application/json")) {
+        finished = true;
+        $("#job-status").textContent = "Signed out";
+        $("#job-status").className = "live-indicator chip chip-idle";
+        throw new Error("You were signed out (SegCheck restarted). Sign in again, then open History to see how this audit ended.");
+      }
+      if (!response.ok) throw new Error(`SegCheck answered with an error (${response.status}). Retrying automatically…`);
       const data = await response.json();
       failures = 0;
       render(data);
       finished = !active.has(data.status);
-    } catch (error) { failures++; $("#job-message").textContent = error.message; }
+    } catch (error) {
+      failures++;
+      $("#job-message").textContent = error instanceof TypeError
+        ? "SegCheck is not reachable right now (closed or restarting). Retrying automatically… If it was restarted, this audit stops and is shown as interrupted."
+        : error.message;
+    }
     if (!finished) setTimeout(poll, Math.min(8000, 700 * 2 ** failures));
   }
 

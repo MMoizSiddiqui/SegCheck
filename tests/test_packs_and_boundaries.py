@@ -74,7 +74,7 @@ def test_cross_zone_path_requires_a_declared_boundary(app):
         save_profile(form(organization="Bank", site="HQ", source_zone="guest", source_ip="10.20.0.100", revision=2))
         version = import_example()
         plan = build_plan(version, "active", check_local_address=False)
-        assert not plan["ready"] and any("Declare the boundary" in item for item in plan["blockers"])
+        assert not plan["ready"] and any("Do Step 3 (Firewall)" in item for item in plan["blockers"])
         declare_boundary(revision=3)
         plan = build_plan(version, "active", check_local_address=False)
         assert plan["ready"] and plan["rows"][0]["boundary"][0]["name"] == "Lab firewall"
@@ -172,7 +172,7 @@ def test_multi_method_job_records_protocols_and_boundary_evidence(app, authentic
         assert "FAIL" in verdicts.values()  # web check reached 443
         evidence = report["boundary_evidence"]
         assert evidence["summary"]["not_connected"] == 25
-        assert "never change" in evidence["note"]
+        assert "a logged block proves" in evidence["note"] and "unauthenticated" in evidence["note"]
 
 
 # ----------------------------------------------------------------- log connector

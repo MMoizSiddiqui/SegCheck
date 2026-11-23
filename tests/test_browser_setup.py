@@ -11,6 +11,9 @@ TOKEN = "test-installation-token-with-at-least-32-bytes"
 
 
 def test_setup_disabled_without_installation_token(app):
+    # The config reads SEGCHECK_SETUP_TOKEN from the environment (set e.g. inside the Docker lab); this test is
+    # about an installation that has none.
+    app.config["SEGCHECK_SETUP_TOKEN"] = None
     assert app.test_client().get("/setup", base_url="https://localhost").status_code == 404
 
 

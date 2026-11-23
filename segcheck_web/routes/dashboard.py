@@ -33,13 +33,13 @@ def live_snapshot():
                 totals[key] += value
     recent = db.session.query(Assessment.id, Assessment.summary, Assessment.created_at).order_by(Assessment.id.desc()).limit(12).all()
     _, environment = settings()
-    zones = db.session.query(Zone.zone_key, Zone.name, func.count(Asset.id)).outerjoin(Asset, Asset.zone_id == Zone.id).group_by(Zone.id).order_by(Zone.id).limit(12).all()
+    zones = db.session.query(Zone.zone_key, Zone.name, func.count(Asset.id)).outerjoin(Asset, (Asset.zone_id == Zone.id) & ~Asset.name.endswith(" interface")).group_by(Zone.id).order_by(Zone.id).limit(12).all()
     job = db.session.query(AssessmentJob).filter_by(actor_user_id=current_user.id).filter(AssessmentJob.status.in_(["queued", "running"])).order_by(AssessmentJob.id.desc()).first()
     response = jsonify({
         "metrics": {"policies": _count(db.session.query(func.count(Policy.id))),
                     "assessments": _count(db.session.query(func.count(Assessment.id))),
                     "zones": _count(db.session.query(func.count(Zone.id))),
-                    "assets": _count(db.session.query(func.count(Asset.id)))},
+                    "assets": _count(db.session.query(func.count(Asset.id)).filter(~Asset.name.endswith(" interface")))},
         "results": totals,
         "recent": [{"id": row.id, "summary": row.summary, "created_at": row.created_at.isoformat()} for row in reversed(recent)],
         "zones": [{"key": key, "name": name, "assets": count,
@@ -82,7 +82,7 @@ def overview():
         db.session.query(func.count(Assessment.id))
     )
     zone_total = _count(db.session.query(func.count(Zone.id)))
-    asset_total = _count(db.session.query(func.count(Asset.id)))
+    asset_total = _count(db.session.query(func.count(Asset.id)).filter(~Asset.name.endswith(" interface")))
 
     result_totals = {
         "total": 0,
@@ -109,8 +109,25 @@ def overview():
         .all()
     )
 
+    # "Latest audit" card: its verdict in the report's own words. "Current setup" card: what Step 2 holds now.
+    latest = None
+    if recent_assessments:
+        from segcheck_web.services.report_view import build as plain_view
+        record = recent_assessments[0]
+        view = plain_view(record.report if isinstance(record.report, dict) else {})
+        latest = {"id": record.id, "word": view["verdict"]["word"], "tone": view["verdict"]["tone"],
+                  "title": view["verdict"]["title"], "name": record.policy.name if record.policy else f"Audit {record.id}",
+                  "created_at": record.created_at}
+    environment = settings()[1]
+    zone_names = {zone.zone_key: zone.name for zone in db.session.query(Zone).all()}
+    networks = environment.get("networks", {}) if isinstance(environment.get("networks"), dict) else {}
+    setup = {"cde": sum(1 for n in networks.values() if isinstance(n, dict) and n.get("role") == "cde"),
+             "here": zone_names.get(environment.get("source_zone", ""), environment.get("source_zone", ""))}
+
     return render_template(
         "dashboard/index.html",
+        latest=latest,
+        setup=setup,
         policy_total=policy_total,
         active_policies=active_policies,
         draft_policies=draft_policies,

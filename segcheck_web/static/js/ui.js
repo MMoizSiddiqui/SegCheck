@@ -141,5 +141,37 @@
     if (active && nav && nav.scrollWidth > nav.clientWidth) nav.scrollLeft = active.offsetLeft - 16;
   }
 
-  document.addEventListener("DOMContentLoaded", () => { navFocus(); reveal(); countups(); clock(); health(); filters(); cardFilters(); });
+  /* Pop-up messages: every saved/refused action's message also appears as a toast in the corner, so it is seen
+     even when the page has jumped to a step further down. Success closes by itself; errors stay until closed. */
+  function toast(text, kind = "info") {
+    let stack = document.querySelector(".toast-stack");
+    if (!stack) {
+      stack = UI.el("div", "toast-stack");
+      stack.setAttribute("aria-live", "polite");
+      document.body.append(stack);
+    }
+    const item = UI.el("div", `toast toast-${kind}`);
+    item.setAttribute("role", kind === "error" ? "alert" : "status");
+    const icon = UI.el("span", "toast-icon", kind === "error" ? "!" : kind === "success" ? "\u2713" : "i");
+    const body = UI.el("span", "toast-text", text);
+    const close = UI.el("button", "toast-close", "\u00d7");
+    close.type = "button";
+    close.setAttribute("aria-label", "Close message");
+    const remove = () => { item.classList.add("is-leaving"); setTimeout(() => item.remove(), reduced ? 0 : 250); };
+    close.addEventListener("click", remove);
+    item.append(icon, body, close);
+    stack.append(item);
+    if (kind !== "error") setTimeout(remove, 7000);
+    return item;
+  }
+  UI.toast = toast;
+
+  function flashToasts() {
+    for (const message of document.querySelectorAll(".flash-message[role=status]")) {
+      const kind = message.classList.contains("flash-error") ? "error" : message.classList.contains("flash-success") ? "success" : "info";
+      toast(message.textContent.trim(), kind);
+    }
+  }
+
+  document.addEventListener("DOMContentLoaded", () => { navFocus(); reveal(); countups(); clock(); health(); filters(); cardFilters(); flashToasts(); });
 })();

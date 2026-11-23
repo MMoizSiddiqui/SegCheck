@@ -84,7 +84,7 @@ def main():
     # browser sessions. This process-only key is neither saved nor used to run a server.
     app = create_app({'SECRET_KEY': os.environ.get('SEGCHECK_SECRET_KEY') or secrets.token_hex(32)})
     with app.app_context():
-        upgrade(directory=str(ROOT / 'migrations'), revision=HEAD)
+        upgrade(directory=str(ROOT / 'segcheck_web' / 'migrations'), revision=HEAD)
     with sqlite3.connect(source.as_uri() + '?mode=ro', uri=True) as connection:
         assert connection.execute('SELECT version_num FROM alembic_version').fetchone() == (HEAD,)
         assert connection.execute('PRAGMA integrity_check').fetchone() == ('ok',)

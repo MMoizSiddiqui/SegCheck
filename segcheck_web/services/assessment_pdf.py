@@ -145,13 +145,14 @@ def generate_assessment_pdf(record):
 
         story = _analyst_story(record, report, styles)
         story.append(PageBreak())
-        story.append(Paragraph("Appendix: complete saved record", styles["Section"]))
-        story.append(Paragraph("Every field persisted for this assessment, reproduced for the audit trail.", styles["BodyText"]))
-        # Compact, complete JSON of the saved record (audit trail), wrapped for print.
-        appendix_style = ParagraphStyle("Appendix", parent=styles["BodyText"], fontName="Courier", fontSize=5.6, leading=6.6, wordWrap="CJK")
-        raw = json.dumps(report, ensure_ascii=True, sort_keys=True, separators=(",", ": "), allow_nan=False)
-        for start in range(0, len(raw), 6000):
-            story.append(Paragraph(escape(raw[start:start + 6000]), appendix_style))
+        story.append(Paragraph("Appendix: audit trail", styles["Section"]))
+        story.append(Paragraph(
+            "The key facts of this saved run. The complete machine-readable record is the file "
+            f"<b>segcheck-assessment-{record.id}.json</b> (report page: <i>Download saved JSON report</i>; the same file is "
+            "<b>report.json</b> inside the evidence bundle). Its SHA-256 fingerprint below proves the file is exactly this "
+            "saved run, unchanged.",
+            styles["BodyText"]))
+        story.extend(_audit_trail(record, report, styles))
 
         story.append(Spacer(1, 12))
         story.append(HRFlowable(width="100%", color=colors.HexColor("#9AAFC5")))
@@ -199,7 +200,8 @@ RESULT_INK = {"FAIL": colors.HexColor("#B42318"), "PASS": colors.HexColor("#1E7B
               "INCONCLUSIVE": colors.HexColor("#9A6700"), "NOT EXERCISED": colors.HexColor("#4B5563")}
 STATUS_TEXT = {"violation": ("ACTION REQUIRED", colors.HexColor("#B42318")),
                "enforced": ("DENY ENFORCED", colors.HexColor("#1E7B34")),
-               "unproven": ("EVIDENCE NEEDED", colors.HexColor("#9A6700"))}
+               "unproven": ("EVIDENCE NEEDED", colors.HexColor("#9A6700")),
+               "attention": ("ACTION REQUIRED", colors.HexColor("#B42318"))}
 
 
 def _p(text, style):
@@ -215,6 +217,41 @@ def _table(rows, widths, header=True, extra=None):
         commands += [("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#F3EEE9")), ("FONT", (0, 0), (-1, 0), "Helvetica-Bold", 7.5)]
     table.setStyle(TableStyle(commands + (extra or [])))
     return table
+
+
+def _audit_trail(record, report, styles):
+    """A readable audit-trail table plus the fingerprint of the exact JSON file the report page offers."""
+    import hashlib
+    exported = json.dumps(report, ensure_ascii=False, allow_nan=False, indent=2).encode("utf-8")  # same bytes as report.json
+    fingerprint = hashlib.sha256(exported).hexdigest()
+    assessment = report.get("assessment") if isinstance(report.get("assessment"), dict) else {}
+    environment = assessment.get("environment") if isinstance(assessment.get("environment"), dict) else {}
+    measurement = report.get("probe_measurement") if isinstance(report.get("probe_measurement"), dict) else {}
+    details = measurement.get("details") if isinstance(measurement.get("details"), list) else []
+    boundary = report.get("boundary_evidence") if isinstance(report.get("boundary_evidence"), dict) else {}
+    summary = boundary.get("summary") if isinstance(boundary.get("summary"), dict) else {}
+    ruleset = environment.get("ruleset") if isinstance(environment.get("ruleset"), dict) else None
+    cell = ParagraphStyle("TrailCell", parent=styles["BodyText"], fontSize=7.6, leading=10, spaceAfter=0)
+    mono = ParagraphStyle("TrailMono", parent=cell, fontName="Courier", fontSize=7.2)
+    created = record.created_at.strftime("%d %b %Y, %H:%M:%S UTC") if record.created_at else "-"
+    rows = [
+        ["Report", f"#{record.id} · saved {created} · saved reports cannot be changed"],
+        ["Policy", record.policy.name if record.policy is not None else "-"],
+        ["Run", f"{measurement.get('run_id', '-')} · {measurement.get('started_at', '-')} to {measurement.get('completed_at', '-')}"],
+        ["Tested from", f"{assessment.get('source_zone') or environment.get('source_zone', '-')} ({environment.get('source_ip', '-')})"],
+        ["Method", str(measurement.get("method", "-"))],
+        ["Measured", f"{len(details)} attempt(s) across {len(report.get('results', []) or [])} rule(s)"],
+        ["Firewall evidence", f"{summary.get('logged_block', 0)} logged blocks · {summary.get('logged_pass', 0)} logged passes · "
+                              f"{summary.get('no_matching_log', 0)} without a log line · {summary.get('not_connected', 0)} without a log feed"],
+        ["Rule export used", (f"{ruleset.get('kind', '')} · {len(ruleset.get('rules', []) or [])} rule(s)"
+                              + (f" + {len(ruleset.get('input_rules') or [])} for the firewall itself" if ruleset.get("input_rules") else "")
+                              + (f" · loaded {ruleset.get('loaded_at')}" if ruleset.get("loaded_at") else "")) if ruleset else "none"],
+    ]
+    table_rows = [[_p(label, cell), _p(value, cell)] for label, value in rows]
+    table_rows.append([_p("SHA-256 of the JSON file", cell), _p(fingerprint, mono)])
+    table_rows.append([_p("Check it", cell), _p(f"Windows: certutil -hashfile segcheck-assessment-{record.id}.json SHA256 · "
+                                                f"Linux/macOS: sha256sum segcheck-assessment-{record.id}.json", mono)])
+    return [_table(table_rows, [38 * mm, 136 * mm], header=False)]
 
 
 def _analyst_story(record, report, styles):
@@ -255,12 +292,39 @@ def _analyst_story(record, report, styles):
               _p(verdict["sentence"], styles["BodyText"]),
               _p(f"{view['counts']['rules']} rules tested · {view['counts']['passed']} passed · {view['counts']['failed']} failed · "
                  f"{view['counts']['unproven']} no answer (not proven)", small)]
+    if view.get("problems"):
+        fixes = [p for p in view["problems"] if p["tone"] == "fix"]
+        story.append(Paragraph("Problems in this run: fix and run again" if fixes else "Notes about this run", styles["Subsection"]))
+        for problem in view["problems"]:
+            story.append(_p(f"{problem['title']}. {problem['text']}" + (f" What to do: {problem['fix']}" if problem["fix"] else ""),
+                            styles["BodyText"]))
     rule_rows = [["Rule", "Target", "Probe sent", "Expected", "What happened", "Result"]]
     for rule in view["rules"]:
         happened = "; ".join(f"{'ping' if a['protocol'] == 'icmp' else str(a['port'])}: {a['label']}" for a in rule["attempts"]) or "-"
+        result_text = f"{rule['outcome_label']}. {rule['why']}"
+        if rule.get("cause"):
+            result_text += f" {rule['cause']['title']}: {rule['cause']['rule']} ({rule['cause']['source']})."
+        if rule.get("reason"):
+            result_text += f" Rule reason: {rule['reason']}"
         rule_rows.append([_p(rule["name"], cell), _p(rule["host"], cell), _p(rule["service"], cell), _p(rule["expected"], cell),
-                          _p(happened, cell), _p(f"{rule['outcome_label']}. {rule['why']}", cell)])
+                          _p(happened, cell), _p(result_text, cell)])
     story.append(_table(rule_rows, [36 * mm, 20 * mm, 22 * mm, 18 * mm, 34 * mm, 46 * mm]))
+    from segcheck_web.services.compliance_assistant import assess
+    judged = assess(view, report.get("results", []))
+    story += [Paragraph("Verdict per standard (compliance assistant)", styles["Subsection"]), _p(judged["conclusion"], styles["BodyText"])]
+    standard_rows = [["Standard", "Control", "Verdict", "Failed on / fix"]]
+    for std in judged["standards"]:
+        for control in std["controls"]:
+            if control["verdict"] == "not_tested":
+                continue
+            detail = "; ".join(control["failing"] + control["broken"])
+            if control["fix"]:
+                detail = (detail + ". " if detail else "") + control["fix"]
+            standard_rows.append([_p(std["name"], cell), _p(f"{control['id']} {control['title']}", cell), _p(control["label"], cell),
+                                  _p(detail or "-", cell)])
+    if len(standard_rows) > 1:
+        story.append(_table(standard_rows, [32 * mm, 46 * mm, 30 * mm, 68 * mm]))
+    story.append(_p(judged["disclaimer"], small))
     if analysis["findings"]:
         story.append(Paragraph("Priority findings", styles["Subsection"]))
         story.append(_table([["Level", "Finding"]] + [[f["level"].upper(), _p(f["text"], cell)] for f in analysis["findings"]],

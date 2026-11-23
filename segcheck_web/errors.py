@@ -30,13 +30,18 @@ EXPLANATIONS = {
     409: ("Cannot do that right now",
           "The stored policy or configuration changed, is incomplete, or did not pass its integrity check.",
           ["Reload the page and review it again.",
-           "Check Network environment: zones, assets, probe address and boundary devices.",
+           "Check New audit: Step 1 (where you are), Step 2 (targets) and Step 3 (firewall).",
            "If a stored record fails its integrity check, restore the data folder from the backups folder."]),
     413: ("Too large", "What was sent is bigger than SegCheck accepts.", ["Upload a smaller file (policies are small YAML/JSON files)."]),
     429: ("Too many attempts", "Sign-in is paused briefly after repeated failures, to stop password guessing.",
           ["Wait a few minutes, then try again."]),
-    500: ("Something went wrong inside SegCheck", "An unexpected error stopped this action. Nothing was half-saved: the change was rolled back.",
-          ["Try again.", "If it happens again, send the reference number below and the file logs/errors.log from the data folder."]),
+    500: ("SegCheck hit a problem it did not expect",
+          "This is a fault inside SegCheck, not something you did wrong. Your data is safe: nothing was half-saved, the action "
+          "was simply undone.",
+          ["Click Go back and try the same thing once more. Many problems are one-off and do not come back.",
+           "If it fails again in the same place, it is a bug in SegCheck. Report it to whoever looks after SegCheck "
+           "(for the public version: open an issue on its GitHub page) and include the reference below.",
+           "Meanwhile you can keep working on other pages; only this one action failed."]),
     503: ("Temporarily unavailable", "A required part (such as network discovery) is not available right now.", ["Wait a moment and try again."]),
 }
 
@@ -87,8 +92,10 @@ def render_error(code, detail=None, incident=None):
 def register_error_pages(app):
     @app.errorhandler(CSRFError)
     def csrf_error(error):
-        return render_error(400, "This form expired or did not come from SegCheck itself (security check). "
-                                 "Reload the page and submit it again.")
+        return render_error(400, "This form expired or did not come from SegCheck itself (security check: every form "
+                                 "carries a one-time token tied to your sign-in). This usually happens when the page was "
+                                 "left open while SegCheck restarted or your session ended. Reload the page (sign in if "
+                                 "asked) and submit it again; nothing was changed.")
 
     @app.errorhandler(HTTPException)
     def http_error(error):

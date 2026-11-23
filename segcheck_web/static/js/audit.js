@@ -29,6 +29,14 @@
       rows.appendChild(copy);
       copy.querySelector("input").focus();
     });
+    /* × on a row removes it; the last row is only emptied, so the form always keeps one. */
+    rows.addEventListener("click", (event) => {
+      const button = event.target.closest("[data-remove-row]");
+      if (!button) return;
+      const row = button.closest("[data-row]");
+      if (rows.querySelectorAll("[data-row]").length > 1) row.remove();
+      else row.querySelectorAll("input").forEach((input) => { input.value = ""; });
+    });
   }
 
   /* Step 2: discovery (known hosts and ping sweep). */
@@ -91,11 +99,7 @@
     card.querySelector("[data-known]").addEventListener("click", (event) =>
       run(card.dataset.knownUrl, {}, "known", event.currentTarget));
     card.querySelector("[data-sweep]").addEventListener("click", (event) => {
-      if (!card.querySelector("[data-sweep-ok]").checked) {
-        status.textContent = "Tick the box first: a ping sweep sends one ping to every address of this network.";
-        return;
-      }
-      const body = new URLSearchParams({ csrf_token: csrf(), authorized: "yes" });
+      const body = new URLSearchParams({ csrf_token: csrf() });
       run(card.dataset.sweepUrl, { method: "POST", body, headers: { Accept: "application/json", "X-CSRFToken": csrf() } }, "sweep", event.currentTarget);
     });
   });
@@ -107,6 +111,25 @@
     const sync = () => { details.hidden = (fwForm.querySelector('input[name="mode"]:checked') || {}).value !== "firewall"; };
     fwForm.querySelectorAll('input[name="mode"]').forEach((radio) => radio.addEventListener("change", sync));
     sync();
+
+    /* 3b follows the type chosen in 3a at once (before saving), so the administrator's steps always match it. */
+    const kind = fwForm.querySelector('select[name="kind"]');
+    const saved = kind ? kind.value : "";
+    const preview = page.querySelector("[data-fw-preview]");
+    const showSteps = () => {
+      const blocks = page.querySelectorAll("[data-fw-steps]");
+      if (!kind || !blocks.length) return;
+      blocks.forEach((block) => { block.hidden = block.dataset.fwSteps !== kind.value; });
+      if (preview) {
+        const changed = kind.value !== saved;
+        preview.hidden = !changed;
+        preview.textContent = changed ? `Showing the steps for ${kind.selectedOptions[0].textContent.trim()} (saved automatically).` : "";
+      }
+      page.querySelectorAll(".firewall-live .lab-note:not([data-fw-preview])").forEach((note) => { note.hidden = kind.value !== saved; });
+      const howto = page.querySelector(".firewall-live details.howto");
+      if (howto && kind.value !== saved) howto.open = true;
+    };
+    if (kind) kind.addEventListener("change", showSteps);
   }
 
   /* Step 3: live log status. */
@@ -172,6 +195,71 @@
       }
       return total;
     }
+    /* Same rules as the server (audit_setup.parse_ports / parse_addresses): wrong input is named as it is typed,
+       and Launch is stopped with the exact problem. */
+    function portsError(text) {
+      const value = text.trim();
+      if (!value) return "Type the ports to test, e.g. 8080 or 9000-9010.";
+      if (/\d\s+-|-\s+\d/.test(value)) return "Remove the spaces around the dash: write a range as 9000-9010.";
+      let total = 0;
+      for (const token of value.split(/[\s,;]+/).filter(Boolean)) {
+        if (/^\d+$/.test(token)) {
+          const port = Number(token);
+          if (port < 1 || port > 65535) return `${token} is not a port: ports go from 1 to 65535.`;
+          total += 1;
+        } else if (/^\d+-\d+$/.test(token)) {
+          const [first, last] = token.split("-").map(Number);
+          if (first < 1 || last > 65535) return `${token}: ports go from 1 to 65535.`;
+          if (last < first) return `The range ${token} runs backwards: write it as ${last}-${first}.`;
+          total += last - first + 1;
+        } else if (/^\d+:\d+$/.test(token)) {
+          return `${token}: write ranges with a dash, as ${token.replace(":", "-")}.`;
+        } else {
+          return `"${token}" is not a port or a range. Use numbers, e.g. 8080, or ranges, e.g. 9000-9010 (no names like "http").`;
+        }
+      }
+      if (total > 400) return `${total} ports is too many for one rule (at most 400). Split it into several rules.`;
+      return "";
+    }
+    function addressesError(text) {
+      const value = text.trim();
+      if (!value) return "Type the addresses to test, e.g. 10.30.0.20, 10.30.0.10-20 or 10.30.0.0/28.";
+      const ip = (part) => /^\d{1,3}(\.\d{1,3}){3}$/.test(part) && part.split(".").every((n) => Number(n) <= 255);
+      for (const token of value.split(/[\s,;]+/).filter(Boolean)) {
+        if (token.includes(":")) continue;  // IPv6: checked by SegCheck when you launch
+        if (token.includes("/")) {
+          const [base, bits] = token.split("/");
+          if (!ip(base) || !/^\d+$/.test(bits) || Number(bits) > 32) return `${token} is not a subnet. Write it like 10.30.0.0/28.`;
+          if (2 ** (32 - Number(bits)) > 258) return `${token} has ${2 ** (32 - Number(bits))} addresses; one rule covers at most 256 (use /24 or smaller).`;
+        } else if (token.includes("-")) {
+          const [first, last] = token.split("-");
+          const end = last && last.includes(".") ? last : `${first.split(".").slice(0, 3).join(".")}.${last}`;
+          if (!ip(first) || !ip(end)) return `${token} is not a range. Write it like 10.30.0.10-20 or 10.30.0.10-10.30.0.40.`;
+          if (ipToInt(end) < ipToInt(first)) return `The range ${token} runs backwards.`;
+          if (ipToInt(end) - ipToInt(first) + 1 > 256) return `${token} covers more than 256 addresses; split it.`;
+        } else if (!ip(token)) {
+          return `"${token}" is not an IP address. Write addresses like 10.30.0.20 (names are not accepted).`;
+        }
+      }
+      return "";
+    }
+    function ruleErrors(row) {
+      const service = row.querySelector('[name="r_service"]');
+      const target = row.querySelector('[name="r_target"]');
+      const portsInput = row.querySelector('[name="r_ports"]');
+      const typedInput = row.querySelector('[name="r_targets"]');
+      const portsProblem = service.value === "custom" && row.querySelector('[name="r_protocol"]').value !== "icmp"
+        ? portsError(portsInput.value) : "";
+      const targetsProblem = target.value === "text" ? addressesError(typedInput.value) : "";
+      const show = (input, box, problem, touched) => {
+        const visible = Boolean(problem) && touched;
+        if (box) { box.hidden = !visible; box.textContent = visible ? problem : ""; }
+        input.setAttribute("aria-invalid", visible ? "true" : "false");
+      };
+      show(portsInput, row.querySelector("[data-ports-error]"), portsProblem, portsInput.value.trim() !== "" || row.dataset.checked === "1");
+      show(typedInput, row.querySelector("[data-targets-error]"), targetsProblem, typedInput.value.trim() !== "" || row.dataset.checked === "1");
+      return portsProblem ? { input: portsInput, text: portsProblem } : targetsProblem ? { input: typedInput, text: targetsProblem } : null;
+    }
     function rulePreview(row) {
       const target = row.querySelector('[name="r_target"]').selectedOptions[0];
       const service = row.querySelector('[name="r_service"]').selectedOptions[0];
@@ -184,8 +272,13 @@
       const each = proto === "icmp" ? 1 : countPorts(portsText);
       const must = row.querySelector('[name="r_must"]').value === "deny" ? "must NOT answer" : "must answer";
       const what = proto === "icmp" ? "1 ping" : each ? `${proto.toUpperCase()} ${portsText}` : `${proto.toUpperCase()} (type the ports)`;
-      if (preview) preview.textContent = `Sends ${what} to ${toText} → ${each * hosts} attempt(s); ${must}.`;
-      return each * hosts;
+      const problem = ruleErrors(row);
+      if (preview) {
+        preview.textContent = problem && (row.dataset.checked === "1" || problem.input.value.trim())
+          ? `Fix this rule first: ${problem.text}` : `Sends ${what} to ${toText} → ${each * hosts} attempt(s); ${must}.`;
+        preview.classList.toggle("is-error", Boolean(problem) && (row.dataset.checked === "1" || Boolean(problem.input.value.trim())));
+      }
+      return problem ? 0 : each * hosts;
     }
     function count() {
       launch.querySelectorAll("[data-mode-panel]").forEach((panel) => { panel.hidden = panel.dataset.modePanel !== mode(); });
@@ -193,12 +286,41 @@
         const total = [...launch.querySelectorAll("[data-rule-row]")].reduce((sum, row) => sum + rulePreview(row), 0);
         out.textContent = String(total);
         out.classList.toggle("is-over", total > max || !total);
-        eta.textContent = total > max ? `Too many: the limit is ${max}.` : total ? `at most ${Math.ceil(total / 60)} min` : "Add a rule with ports.";
+        eta.textContent = total > max ? `Too many: the limit is ${max}.` : total ? duration(total) : "Add a rule with ports.";
+        return;
+      }
+      const several = launch.querySelector('input[name="scope"]:checked')?.value === "several";
+      syncScope(several);
+      showRelevantProbes(several);
+      const ticked = new Set([...launch.querySelectorAll('input[name="groups"]:checked')].map((box) => box.value));
+      if (several) {
+        const chosen = [...launch.querySelectorAll('input[name="pack"]:checked')];
+        const pairs = new Map();
+        for (const box of chosen) {
+          const hosts = (box.dataset.targetList || "").split(",").map((h) => h.trim()).filter(Boolean);
+          box.closest(".pack-card").querySelectorAll("[data-group]").forEach((g) => {
+            if (ticked.has(g.dataset.group)) hosts.forEach((h) => pairs.set(`${h}|${g.dataset.group}`, Number(g.dataset.cost)));
+          });
+        }
+        const total = [...pairs.values()].reduce((a, b) => a + b, 0);
+        out.textContent = chosen.length ? String(total) : "–";
+        if (standardPreview) {
+          standardPreview.replaceChildren();
+          const title = document.createElement("p");
+          title.className = "send-title";
+          title.textContent = chosen.length ? `${chosen.length} standard check(s) chosen. Probes shared by several standards are sent once:` : "Tick the standards to include.";
+          const list = document.createElement("ul");
+          chosen.forEach((box) => list.append(line(box.closest(".pack-card").querySelector("strong").textContent,
+            ` · ${box.closest(".pack-card").querySelector(".pack-meta").textContent} · ${box.dataset.targets} target(s)`)));
+          standardPreview.append(title, list);
+        }
+        eta.textContent = !chosen.length ? "Tick at least one standard." : !total ? "Tick probes these standards use." :
+          total > max ? `Too many: the limit is ${max}. Untick some standards or probes.` : duration(total);
+        out.classList.toggle("is-over", total > max || !total);
         return;
       }
       const pack = launch.querySelector('input[name="pack"]:checked');
       if (!pack) { out.textContent = "–"; eta.textContent = "Choose a standard."; return; }
-      const ticked = new Set([...launch.querySelectorAll('input[name="groups"]:checked')].map((box) => box.value));
       const card = pack.closest(".pack-card");
       let perTarget = 0;
       card.querySelectorAll("[data-group]").forEach((g) => { if (ticked.has(g.dataset.group)) perTarget += Number(g.dataset.cost); });
@@ -217,10 +339,73 @@
       }
       if (!perTarget) eta.textContent = "Tick at least one probe this standard uses.";
       else if (total > max) eta.textContent = `Too many: the limit is ${max}. Untick some probes or remove hosts.`;
-      else eta.textContent = `at most ${Math.ceil(total / 60)} min`;
+      else eta.textContent = duration(total);
       out.classList.toggle("is-over", total > max || !perTarget);
     }
+    /* "Which probes" lists only the probe kinds the chosen standard(s) actually send; the others are hidden,
+       so nobody thinks they apply. (Without JavaScript all are listed, and only the relevant ones are sent.) */
+    function showRelevantProbes(several) {
+      const chosen = [...launch.querySelectorAll('input[name="pack"]:checked')];
+      const used = new Set();
+      chosen.forEach((box) => box.closest(".pack-card").querySelectorAll("[data-group]").forEach((g) => used.add(g.dataset.group)));
+      launch.querySelectorAll('input[name="groups"]').forEach((box) => {
+        const card = box.closest(".group-card");
+        if (card) card.hidden = !used.has(box.value);
+      });
+      const hint = launch.querySelector("[data-probes-hint]");
+      if (!hint) return;
+      if (!chosen.length) {
+        hint.textContent = several ? "Tick the standards above: the probes they use appear here." : "Choose a standard above: the probes it uses appear here.";
+      } else {
+        const name = chosen.length === 1 ? `“${chosen[0].closest(".pack-card").querySelector("strong").textContent.trim()}”`
+          : `the ${chosen.length} chosen standards`;
+        hint.textContent = `The ${used.size} kind${used.size === 1 ? "" : "s"} of probe ${name} ${chosen.length === 1 ? "uses" : "use"}. ` +
+          "Only these are sent; untick any you don't need.";
+      }
+    }
+    /* Attempts run one after another. A blocked attempt: 1 s wait, then up to 2 s for the firewall's log line (the lab's
+       firewall sends its logs about once a second). Measured in the lab: 50 attempts in 68 s, so about 1.5 s with logs.
+       A silent attempt that the firewall did not log as blocked is tried again (3 s more), so without logs blocked doors
+       cost about 4.4 s each. Open or refused doors answer at once. Plus a few seconds at the end for the last log lines. */
+    function duration(attempts) {
+      const fmt = (seconds) => seconds < 60 ? `${seconds} s` : `${Math.floor(seconds / 60)} min ${String(seconds % 60).padStart(2, "0")} s`;
+      const logged = launch.dataset.logs === "1";
+      const usual = Math.ceil(attempts * (logged ? 1.5 : 4.4) + 6);
+      const worst = Math.ceil(attempts * 4.4 + 6);
+      return logged ? `about ${fmt(usual)} with the firewall's logs (up to ${fmt(worst)} if they stop arriving; longer on a slow network)`
+                    : `up to about ${fmt(worst)} (silent attempts are tried twice; longer on a slow network; connecting the firewall's logs makes it faster)`;
+    }
+    function syncScope(several) {
+      const boxes = [...launch.querySelectorAll('input[name="pack"]')];
+      const want = several ? "checkbox" : "radio";
+      if (boxes.length && boxes[0].type !== want) {
+        const first = boxes.find((box) => box.checked && !box.disabled);
+        boxes.forEach((box) => { box.type = want; box.checked = !several && box === first; });
+        if (several && first) first.checked = true;
+      }
+      const hint = launch.querySelector("[data-scope-hint]");
+      if (hint) hint.hidden = !several;
+    }
+    launch.querySelector("[data-select-all-packs]")?.addEventListener("click", () => {
+      launch.querySelectorAll('input[name="pack"]:not([disabled])').forEach((box) => { box.checked = true; });
+      count();
+    });
     launch.addEventListener("change", count);
+    // My own rules: stop Launch on a wrong rule, say exactly what is wrong (popup) and put the cursor there.
+    launch.addEventListener("submit", (event) => {
+      if (mode() !== "custom") return;
+      const rows = [...launch.querySelectorAll("[data-rule-row]")];
+      rows.forEach((row) => { row.dataset.checked = "1"; });
+      const index = rows.findIndex((row) => ruleErrors(row));
+      count();
+      if (index < 0) return;
+      event.preventDefault();
+      const problem = ruleErrors(rows[index]);
+      const ui = window.SegCheckUI;
+      if (ui && ui.toast) ui.toast(`Rule ${index + 1}: ${problem.text}`, "error");
+      problem.input.focus();
+      problem.input.select?.();
+    });
     if (!launch.querySelector('input[name="pack"]:not([disabled])')) {
       const custom = launch.querySelector('input[name="mode"][value="custom"]');
       if (custom) custom.checked = true;  // no standard fits (e.g. only hosts in this PC's own network)
@@ -235,9 +420,10 @@
       const ports = row.querySelector("[data-custom-ports]");
       const target = row.querySelector("[data-target-select]");
       const typed = row.querySelector("[data-typed-targets]");
-      const sync = () => { ports.hidden = service.value !== "custom"; typed.hidden = target.value !== "text"; };
+      const typedBox = row.querySelector("[data-typed-box]") || typed;
+      const sync = () => { ports.hidden = service.value !== "custom"; typedBox.hidden = target.value !== "text"; };
       service.addEventListener("change", () => { sync(); count(); });
-      target.addEventListener("change", () => { sync(); if (!typed.hidden) typed.focus(); count(); });
+      target.addEventListener("change", () => { sync(); if (!typedBox.hidden) typed.focus(); count(); });
       row.addEventListener("input", count);
       row.querySelector("[data-remove-rule]").addEventListener("click", () => {
         if (ruleRows.querySelectorAll("[data-rule-row]").length > 1) { row.remove(); count(); }
@@ -351,4 +537,150 @@
       csvStatus.textContent = `Saved ${lines.length - 1} rule(s). Load this file on the next PC, or add rows for other departments.`;
     });
   }
+
+  /* Autosave: Step 1 and Step 3a save themselves a moment after a change (no page reload; errors pop up).
+     "Save Step N and continue" also sends anything typed but not yet added, then opens the next step.
+     Without JavaScript every form still has its own submit button. */
+  const ui = window.SegCheckUI || {};
+  const say = (text, kind) => { if (ui.toast) ui.toast(text, kind); };
+  const post = async (form) => {
+    const response = await fetch(form.action, { method: "POST", body: new FormData(form), credentials: "same-origin" });
+    if (response.redirected && new URL(response.url).pathname.startsWith("/login")) {
+      return { ok: false, error: "You were signed out (SegCheck restarted). Sign in again; then redo the last change." };
+    }
+    const doc = new DOMParser().parseFromString(await response.text(), "text/html");
+    const error = doc.querySelector(".flash-message.flash-error");
+    if (!response.ok || error) return { ok: false, error: error ? error.textContent.trim() : "Could not save. Reload the page and try again." };
+    const done = doc.querySelector(".flash-message.flash-success");
+    return { ok: true, message: done ? done.textContent.trim() : "" };
+  };
+  const snapshot = (form) => [...new FormData(form)].filter(([key]) => key !== "csrf_token")
+    .map(([key, value]) => `${key}=${value instanceof File ? value.name : value}`).join("&");
+  const autosaves = [];
+  page.querySelectorAll("form[data-autosave]").forEach((form) => {
+    const button = form.querySelector("[data-autosave-button]");
+    if (button) button.hidden = true;
+    const status = document.createElement("p");
+    status.className = "autosave-status";
+    status.setAttribute("role", "status");
+    form.append(status);
+    let saved = snapshot(form);
+    let timer = null;
+    let running = Promise.resolve(true);
+    const save = (force = false) => {
+      clearTimeout(timer);
+      running = running.then(async () => {
+        if (force !== true && snapshot(form) === saved) return true;
+        if (!form.checkValidity()) {
+          status.textContent = "Not saved yet: fill in the highlighted fields.";
+          status.dataset.state = "waiting";
+          return false;
+        }
+        status.textContent = "Saving…";
+        status.dataset.state = "saving";
+        const state = snapshot(form);
+        try {
+          const result = await post(form);
+          if (!result.ok) {
+            status.textContent = "Not saved.";
+            status.dataset.state = "error";
+            say(result.error, "error");
+            return false;
+          }
+          saved = state;
+          const time = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+          status.textContent = `✓ Saved automatically · ${time}`;
+          status.dataset.state = "saved";
+          return true;
+        } catch (error) {
+          status.textContent = "Not saved: SegCheck is not reachable.";
+          status.dataset.state = "error";
+          return false;
+        }
+      });
+      return running;
+    };
+    form.addEventListener("change", () => { clearTimeout(timer); timer = setTimeout(save, 400); });
+    form.addEventListener("input", (event) => {
+      if (event.target.matches("input[type=text], input:not([type]), textarea")) { clearTimeout(timer); timer = setTimeout(save, 1500); }
+    });
+    form.addEventListener("submit", (event) => { event.preventDefault(); save(true); });
+    autosaves.push({ form, save });
+  });
+
+  const typedSomething = (form) => {
+    if (form.matches(".add-targets")) {
+      return [...form.querySelectorAll('input[name="t_name"], input[name="t_cidr"], input[name="t_hosts"]')].some((input) => input.value.trim());
+    }
+    return [...form.querySelectorAll("input[type=text], input:not([type]), textarea, input[type=file]")]
+      .some((input) => (input.type === "file" ? input.files.length : input.value.trim()));
+  };
+  page.querySelectorAll("[data-step-finish]").forEach((button) => {
+    const section = button.closest(".step-card");
+    button.addEventListener("click", async () => {
+      button.disabled = true;
+      const label = button.textContent;
+      button.textContent = "Saving…";
+      const stop = (message) => { if (message) say(message, "error"); button.disabled = false; button.textContent = label; };
+      for (const item of autosaves.filter((entry) => section.contains(entry.form))) {
+        if (!(await item.save(button.dataset.done !== "yes"))) return stop(item.form.checkValidity() ? "" : "Fill in the highlighted fields first.");
+      }
+      const pending = [...section.querySelectorAll("form[data-pending-form]")].filter(typedSomething);
+      for (const form of pending) {
+        if (!form.checkValidity()) { form.reportValidity(); return stop(""); }
+        const result = await post(form);
+        if (!result.ok) return stop(result.error);
+      }
+      const changed = pending.length || autosaves.some((entry) => section.contains(entry.form));
+      if (!changed && button.dataset.done !== "yes") return stop(button.dataset.waiting);
+      try { sessionStorage.setItem("segcheck-step-saved", `Step ${button.dataset.stepFinish} saved.`); } catch (error) { /* private mode */ }
+      location.replace(`${location.pathname}#step-${button.dataset.next}`);
+      location.reload();
+    });
+  });
+  try {
+    const note = sessionStorage.getItem("segcheck-step-saved");
+    if (note) { sessionStorage.removeItem("segcheck-step-saved"); say(note, "success"); }
+  } catch (error) { /* private mode */ }
+
+  /* Step 3a: "Here it is …" follows the "Firewall's address in this network" field as it is typed (autosave does not reload). */
+  const hereText = page.querySelector("[data-fw-here-text]");
+  const hereField = page.querySelector('form[data-firewall-form] input[name="firewall_ip"]');
+  if (hereText && hereField) {
+    const follow = () => { hereText.textContent = hereField.value.trim() || hereText.dataset.empty; };
+    hereField.addEventListener("input", follow);
+    follow();
+  }
+
+  /* Step 3a: a suggested firewall address is added to the field only when the auditor clicks it (then autosaved). */
+  page.querySelectorAll("[data-add-address]").forEach((chip) => chip.addEventListener("click", () => {
+    const input = page.querySelector("[data-other-ips]");
+    if (!input) return;
+    const list = input.value.split(/[\s,;]+/).filter(Boolean);
+    if (!list.includes(chip.dataset.addAddress)) list.push(chip.dataset.addAddress);
+    input.value = list.join(" ");
+    input.dispatchEvent(new Event("change", { bubbles: true }));
+    chip.remove();
+  }));
+
+  /* Step 4: each standard's full explanation opens in a side drawer (native <dialog>: Esc closes, focus is kept inside). */
+  page.querySelectorAll("[data-pack-open]").forEach((button) => {
+    const dialog = document.getElementById(button.dataset.packOpen);
+    if (!dialog || typeof dialog.showModal !== "function") return;
+    button.addEventListener("click", () => dialog.showModal());
+    dialog.addEventListener("click", (event) => {
+      if (event.target === dialog) dialog.close(); /* a click on the dimmed backdrop */
+    });
+    dialog.querySelectorAll("[data-pack-close]").forEach((close) => close.addEventListener("click", () => dialog.close()));
+    dialog.addEventListener("close", () => button.focus());
+    const use = dialog.querySelector("[data-pack-use]");
+    if (use) use.addEventListener("click", () => {
+      const input = page.querySelector(`input[name="pack"][value="${use.dataset.packUse}"]`);
+      if (input && !input.disabled) {
+        input.checked = true;
+        input.dispatchEvent(new Event("change", { bubbles: true }));
+      }
+      dialog.close();
+    });
+  });
 })();

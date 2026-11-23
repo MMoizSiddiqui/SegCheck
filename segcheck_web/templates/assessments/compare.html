@@ -1,0 +1,45 @@
+{% extends "base.html" %}
+{% block title %}Compare audits | SegCheck{% endblock %}
+{% block content %}
+{% set h = diff.headline %}
+{% set sections = [('regression', 'Got worse (regression)', 'Passed or held before, fails now: a change opened this path.'),
+                   ('fixed', 'Fixed', 'Failed before, holds now: the remediation is proven.'),
+                   ('still_failing', 'Still failing', 'Failed in both audits.'),
+                   ('new', 'Only in the later audit', 'Tested now, not before.'),
+                   ('gone', 'Only in the earlier audit', 'Tested before, not now.'),
+                   ('unchanged', 'Unchanged', 'Same result in both audits.')] %}
+<main class="history">
+<section class="audit-hero compact">
+    <div>
+        <p class="eyebrow">HISTORY · DRIFT AND REGRESSION</p>
+        <h1>Compare two audits</h1>
+        <p class="lead">Earlier: <a href="{{ url_for('assessments.assessment_detail', assessment_id=older.id) }}">#{{ older.id }}</a>
+            ({{ older.created_at.strftime('%d %b %Y, %H:%M') }} UTC, from {{ older.source_zone }}) · Later:
+            <a href="{{ url_for('assessments.assessment_detail', assessment_id=newer.id) }}">#{{ newer.id }}</a>
+            ({{ newer.created_at.strftime('%d %b %Y, %H:%M') }} UTC, from {{ newer.source_zone }})</p>
+    </div>
+    <a class="ghost-button" href="{{ url_for('assessments.assessment_workspace') }}">Back to History</a>
+</section>
+
+<section class="verdict-card tone-{{ h.tone }}">
+    <div class="verdict-word">{{ h.word }}</div>
+    <div><h2>{{ h.title }}</h2><p>{{ h.sentence }}</p>
+        <p class="small">{{ diff.counts.regression }} worse · {{ diff.counts.fixed }} fixed · {{ diff.counts.still_failing }} still failing ·
+            {{ diff.counts.unchanged }} unchanged · {{ diff.counts.new }} new · {{ diff.counts.gone }} no longer tested</p></div>
+</section>
+
+{% for key, title, hint in sections %}{% set items = diff.rows[key] %}{% if items %}
+<section class="setup-card compare-section compare-{{ key }}">
+    <div class="section-heading"><h2>{{ title }} ({{ items|length }})</h2><span class="panel-caption">{{ hint }}</span></div>
+    <table class="compare-table">
+        <thead><tr><th>Path</th><th>Rule</th><th>Earlier</th><th>Later</th></tr></thead>
+        <tbody>{% for row in items %}
+            <tr><td class="mono">{{ row.what }}</td><td>{{ row.expected }}</td>
+                <td><span class="tone-text tone-{{ row.before_tone }}">{{ row.before }}</span></td>
+                <td><span class="tone-text tone-{{ row.after_tone }}">{{ row.after }}</span></td></tr>
+        {% endfor %}</tbody>
+    </table>
+</section>
+{% endif %}{% endfor %}
+</main>
+{% endblock %}

@@ -11,7 +11,7 @@ from segcheck_web import create_app
 from segcheck_web.extensions import db
 
 
-MIGRATIONS_DIR = Path(__file__).resolve().parents[1] / "migrations"
+MIGRATIONS_DIR = Path(__file__).resolve().parents[1] / "segcheck_web" / "migrations"
 
 PREVIOUS_REVISION = "6eb351123c3a"
 LATEST_REVISION = "f3a9c1d7e2b4"

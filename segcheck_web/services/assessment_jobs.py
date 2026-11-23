@@ -14,6 +14,9 @@ from segcheck_web.services.assessment_plan import build_plan
 
 ACTIVE = {"queued", "running"}
 _executor_lock = threading.Lock()
+PROCESS_STARTED = utc_now()  # a run older than this process cannot still be running: SegCheck was restarted or closed
+STOPPED_MESSAGE = ("SegCheck stopped while this audit was running (it was closed, restarted or lost its connection), so the "
+                   "audit could not finish. Nothing was saved as a report: start it again from New audit, Step 4.")
 
 
 class JobBusy(ValueError):
@@ -25,6 +28,14 @@ def _aware(value):
 
 
 def expire_stale_jobs():
+    """Mark runs that can no longer finish as interrupted: right away after a restart, or 90 s after the last sign of life."""
+    orphaned = db.session.query(AssessmentJob).filter(AssessmentJob.status.in_(ACTIVE)).all()
+    for job in orphaned:
+        if _aware(job.updated_at or job.created_at) < PROCESS_STARTED:
+            job.status, job.message, job.updated_at = "interrupted", STOPPED_MESSAGE, utc_now()
+            db.session.query(AssessmentLease).filter_by(id=1, job_id=job.id).delete(synchronize_session=False)
+    if orphaned:
+        db.session.commit()
     lease = db.session.get(AssessmentLease, 1)
     if lease is not None and _aware(lease.expires_at) < utc_now():
         job_id = lease.job_id
@@ -35,7 +46,7 @@ def expire_stale_jobs():
             job = db.session.get(AssessmentJob, job_id)
             if job is not None and job.status in ACTIVE:
                 job.status = "interrupted"
-                job.message = "Execution heartbeat expired. Partial observations are not a completed assessment. Review before starting a new run."
+                job.message = STOPPED_MESSAGE
                 job.updated_at = utc_now()
         db.session.commit()
 
@@ -61,8 +72,15 @@ def create_job(version, plan, actor_id, preview_token):
         existing = db.session.query(AssessmentJob).filter_by(nonce=nonce).one_or_none()
         if existing:
             return existing, False
-        raise JobBusy("Another assessment is running. Wait for it to finish or cancel it from its progress page.") from exc
+        raise JobBusy("Another audit is still running. Open it from the banner at the top of Step 4, then wait for it "
+                      "or cancel it.") from exc
     return job, True
+
+
+def running_job():
+    """The audit running right now, if any (after clearing runs that can no longer finish)."""
+    expire_stale_jobs()
+    return db.session.query(AssessmentJob).filter(AssessmentJob.status.in_(ACTIVE)).order_by(AssessmentJob.id.desc()).first()
 
 
 def _control(job_id):
@@ -121,8 +139,8 @@ def run_job(app, job_id):
             if job is not None and job.status in ACTIVE:
                 job.status = "cancelled" if job.cancel_requested else "failed"
                 if job.cancel_requested:
-                    job.message = (f"Cancelled by the operator after {job.completed} of {job.total} attempts. "
-                                   "Partial observations are not saved as an assessment report.")
+                    job.message = (f"Cancelled by you after {job.completed} of {job.total} attempts. Nothing was saved as a "
+                                   "report (a half-finished audit would be misleading). Start it again from New audit, Step 4.")
                 else:
                     job.message = str(exc)[:500] if isinstance(exc, AssessmentExecutionError) else "Execution could not be completed safely. Review configuration and retry."
             if not isinstance(exc, AssessmentExecutionError):

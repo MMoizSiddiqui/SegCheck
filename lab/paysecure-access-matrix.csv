@@ -1,0 +1,14 @@
+from,to,service,protocol,ports,must,reason
+Corporate staff LAN,10.60.0.10,web,,,work,Staff use the public website
+Corporate staff LAN,10.70.0.10,custom,tcp,"445, 389, 8080",work,"File shares, directory logon and the intranet"
+Corporate staff LAN,10.50.0.10,db,,,blocked,HR personal data stays inside HR
+Corporate staff LAN,"10.30.0.10, 10.30.0.20",db,,,blocked,Card data is isolated from staff PCs (PCI DSS 1.3.1)
+Corporate staff LAN,10.30.0.10,ssh,,,blocked,Only the admin network may manage the payment API
+*,10.30.0.10,custom,tcp,"23, 3389, 5900, 5985, 5986",blocked,"Telnet, remote desktop and WinRM are never reachable on the payment API"
+*,10.30.0.10,custom,tcp,9000-9010,blocked,No department reaches the payment API's internal test ports
+Guest Wi-Fi,10.70.0.10,files,,,blocked,Visitors never reach the file server
+DMZ public web,10.30.0.10,custom,tcp,8443,work,Checkout calls the payment API
+DMZ public web,10.30.0.20,db,,,blocked,The website never talks to the card database directly
+Admin network,10.30.0.10,ssh,,,work,Administrators manage the payment API over SSH only (approved management service)
+Admin network,10.30.0.10,custom,tcp,8443,blocked,The admin network does not use the payment application itself
+Admin network,10.30.0.20,db,,,blocked,Even administrators never query the card database directly

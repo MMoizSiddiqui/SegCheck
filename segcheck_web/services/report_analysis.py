@@ -24,8 +24,8 @@ FAIL_ACTION = {
     "file_directory": "Block SMB, NetBIOS, LDAP and NFS from {source} to {host}. These protocols enable lateral movement and credential theft.",
     "infra_udp": "Deny DNS/NTP/SNMP from {source} to {host}, or point {source} at its own approved infrastructure servers.",
     "icmp": "Drop ICMP echo from {source} to {host}. Reachability by ping helps attackers map the protected network.",
-    "mgmt_plane": "Disable firewall management (SSH/HTTP/HTTPS) on the {source}-facing interface; allow it only from a management network.",
-    "mgmt_plane_udp": "Disable SNMP on the {source}-facing firewall interface, or restrict it to the monitoring server.",
+    "mgmt_plane": "The firewall's admin service answered {source} on its address {host}. Allow firewall management (SSH/HTTP/HTTPS) only from the management network, on every firewall address, not just the one facing {source}.",
+    "mgmt_plane_udp": "The firewall's SNMP answered {source} on its address {host}. Disable SNMP on that address or restrict it to the monitoring server.",
 }
 
 
@@ -195,6 +195,13 @@ def analyse(report: dict, networks: dict | None = None) -> dict:
         status = "unproven"
         headline = "Nothing exercised from this probe"
         meaning = "All checks require a probe in another source zone."
+    if allows_down and status != "violation":
+        # Same as the report's top verdict (ATTENTION): an approved service that does not work needs action too.
+        status = "attention"
+        headline = f"Approved service not working: {len(allows_down)} check(s)" + (
+            "; every forbidden path stayed blocked" if denies and not unproven else "")
+        meaning = ("A service that must work did not answer: a rule may block an approved flow, or the service is down. "
+                   "Check the red rows, fix the rule or the service, and retest. " + meaning)
     findings = ([{"level": "critical", "item": item, "text": f"{item['row'].get('source_zone')} → {item['row'].get('destination_host')} "
                   f"{item['method_label']} reachable" + (f" on {', '.join(str(p) for p in item['reached_ports'])}" if item["reached_ports"] else "")}
                  for item in fails]

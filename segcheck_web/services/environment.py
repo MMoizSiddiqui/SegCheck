@@ -65,7 +65,7 @@ def save_zone(form):
         raise EnvironmentError("Zone keys use 2–32 letters, numbers, underscores or hyphens, starting with a letter.")
     name = field(form, "name", 120)
     role = field(form, "role", 16, required=False) or "custom"
-    if role not in {"guest", "corporate", "hr", "cde", "dmz", "server", "untrusted", "custom"}:
+    if role not in {"guest", "corporate", "hr", "cde", "dmz", "server", "untrusted", "management", "custom"}:
         raise EnvironmentError("Choose a supported zone role.")
     try:
         network = ipaddress.ip_network(field(form, "cidr", 64), strict=True)
@@ -222,10 +222,16 @@ def use_this_machine(form):
 DEVICE_KINDS = {
     "pfsense": "pfSense / OPNsense firewall (filterlog syslog)",
     "iptables": "Linux iptables / nftables firewall (kernel LOG syslog)",
+    "fortigate": "Fortinet FortiGate (FortiOS traffic log syslog)",
+    "cisco": "Cisco ASA / Firepower Threat Defense (syslog)",
+    "sophos": "Sophos Firewall / XG (syslog)",
+    "mikrotik": "MikroTik RouterOS (firewall topic syslog)",
     "other": "Other firewall or router (no log parser)",
     "none": "No enforcing device / unknown (records a limitation)",
 }
 MAX_DEVICES = 20
+MAX_OTHER_ADDRESSES = 16
+LOG_KINDS = {"pfsense", "iptables", "fortigate", "cisco", "sophos", "mikrotik"}  # firewalls whose logs SegCheck reads
 
 
 def save_device(form):
@@ -245,11 +251,22 @@ def save_device(form):
         interface_ip = literal_ip(interface_ip)
         if not any(ipaddress.ip_address(interface_ip) in ipaddress.ip_network(networks[zone]["cidr"]) for zone in zones):
             raise EnvironmentError("The interface IP must belong to one of the selected zones' subnets.")
+    # The device's own addresses in the other networks (management-plane targets only; never used for logs).
+    other_ips = []
+    for raw in form.getlist("other_ips")[:MAX_OTHER_ADDRESSES + 1]:
+        address = literal_ip(raw)
+        if not any(ipaddress.ip_address(address) in ipaddress.ip_network(networks[zone]["cidr"]) for zone in zones):
+            raise EnvironmentError(f"{address} is not inside any of the networks this firewall separates.")
+        if address != interface_ip and address not in other_ips:
+            other_ips.append(address)
+    if len(other_ips) > MAX_OTHER_ADDRESSES:
+        raise EnvironmentError(f"At most {MAX_OTHER_ADDRESSES} other firewall addresses are supported.")
     logging_enabled = field(form, "logging", 3, required=False) == "on"
     sender_ip, log_port, listen_ip = "", 0, ""
     if logging_enabled:
-        if kind not in {"pfsense", "iptables"}:
-            raise EnvironmentError("Log collection is available for pfSense/OPNsense and Linux iptables devices.")
+        if kind not in LOG_KINDS:
+            raise EnvironmentError("Log collection is available for pfSense/OPNsense, Linux, FortiGate, Cisco ASA/FTD, "
+                                   "Sophos and MikroTik firewalls.")
         # Empty sender = learn it: the first address that sends a recognised firewall log is used.
         sender_ip = field(form, "log_sender_ip", 45, required=False)
         sender_ip = literal_ip(sender_ip) if sender_ip else ""
@@ -270,24 +287,29 @@ def save_device(form):
     if len(devices) >= MAX_DEVICES:
         raise EnvironmentError(f"At most {MAX_DEVICES} boundary devices are supported.")
     devices.append({"id": device_id, "name": name, "kind": kind, "zones": zones, "interface_ip": interface_ip,
-                    "logging": logging_enabled, "log_sender_ip": sender_ip, "log_port": log_port,
+                    "other_ips": other_ips, "logging": logging_enabled, "log_sender_ip": sender_ip, "log_port": log_port,
                     "log_listen_ip": listen_ip})
     payload["devices"] = sorted(devices, key=lambda item: item["name"].lower())
     _save_settings(record, payload, form)
     _commit()
-    if interface_ip:
-        _register_interface_asset(name, interface_ip, zones, networks)
+    _remove_interface_assets(name)  # addresses removed from the form must stop being tested
+    for address in ([interface_ip] if interface_ip else []) + other_ips:
+        _register_interface_asset(name, address, zones, networks)
 
 
 def delete_device(form):
     record, payload = settings()
     device_id = field(form, "device_id", 40)
+    payload_before = list(payload.get("devices", []))
     devices = [device for device in payload.get("devices", []) if device["id"] != device_id]
     if len(devices) == len(payload.get("devices", [])):
         raise EnvironmentError("Device not found.")
     payload["devices"] = devices
     _save_settings(record, payload, form)
     _commit()
+    for device in payload_before:
+        if device["id"] == device_id:
+            _remove_interface_assets(device["name"])
 
 
 def _device_id(name):
@@ -295,6 +317,21 @@ def _device_id(name):
     if not slug:
         raise EnvironmentError("Give the device a name with letters or numbers.")
     return slug
+
+
+def is_device_address(asset_name):
+    """Assets named '<device> interface' are a firewall's own addresses, not systems in that network."""
+    return asset_name.endswith(" interface")
+
+
+def register_device_address(name, address, zones, networks):
+    _register_interface_asset(name, address, zones, networks)
+
+
+def _remove_interface_assets(device_name):
+    for asset in db.session.query(Asset).filter_by(name=f"{device_name} interface").all():
+        db.session.delete(asset)
+    _commit()
 
 
 def _register_interface_asset(name, address, zones, networks):

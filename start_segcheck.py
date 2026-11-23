@@ -358,7 +358,7 @@ def run(args):
     from segcheck_web.models import User
 
     app = create_app()
-    migrations = ROOT / "migrations"
+    migrations = ROOT / "segcheck_web" / "migrations"
     database = data_dir / "segcheck.sqlite3"
     def prepare_database():
         with app.app_context():

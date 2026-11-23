@@ -215,7 +215,7 @@ def wait_job(browser, job_id, timeout=420):
 
 
 def launch(browser, fields):
-    response = browser.post("/audit/launch", {**fields, "authorized": "yes"}, follow=False)
+    response = browser.post("/audit/launch", fields, follow=False)
     location = response.headers.get("Location") or ""
     match = re.search(r"/jobs/(\d+)", location)
     if not match:
@@ -290,7 +290,7 @@ def run(base, here_ip, lab_ip, setup_token):
     bad_hosts = browser.post("/audit/targets", {"t_name": ["Bad"], "t_cidr": [""], "t_type": ["custom"], "t_hosts": ["10.9.9.x"]})
     check("A bad host address is explained", "Not an IP address: 10.9.9.x" in flashes(bad_hosts))
     overlap = browser.post("/audit/targets", {"t_name": ["Overlap"], "t_cidr": [str(here_net)], "t_type": ["custom"], "t_hosts": [""]})
-    check("A target overlapping this PC's network is refused", "must not overlap" in flashes(overlap))
+    check("A target overlapping this PC's network is refused", "overlaps" in flashes(overlap) and "Step 1" in flashes(overlap), flashes(overlap))
     added = browser.post("/audit/targets", {
         "t_name": ["Lab services (E2E)", "Card systems (E2E)", "Office (E2E)"],
         "t_cidr": [str(lab_net), "198.51.100.0/24", ""],
@@ -303,15 +303,13 @@ def run(base, here_ip, lab_ip, setup_token):
     lab_key, cde_key = keys.get("Lab services (E2E)"), keys.get("Card systems (E2E)")
     known = browser.get(f"/audit/targets/{lab_key}/known")
     check("Known-hosts lookup answers (no traffic sent)", known.status == 200 and known.headers.get("Cache-Control") == "no-store")
-    refused = browser.request("POST", f"/audit/targets/{lab_key}/sweep", data={"csrf_token": browser.get("/audit/").csrf()})
-    check("Ping sweep needs explicit permission", refused.status == 400 and "Tick the box" in refused.json()["error"])
-    swept = browser.request("POST", f"/audit/targets/{lab_key}/sweep", data={"csrf_token": browser.get("/audit/").csrf(), "authorized": "yes"})
+    swept = browser.request("POST", f"/audit/targets/{lab_key}/sweep", data={"csrf_token": browser.get("/audit/").csrf()})
     sweep = swept.json() if swept.status == 200 else {}
     check("Ping sweep covers the whole /24 and never offers this PC itself", sweep.get("pinged") == 254 and
           lab_ip not in {h["address"] for h in sweep.get("hosts", [])}, f"{sweep.get('pinged')} pinged, {len(sweep.get('hosts', []))} found")
     big = browser.post("/audit/targets", {"t_name": ["Big"], "t_cidr": ["100.64.0.0/16"], "t_type": ["custom"], "t_hosts": [""]})
     big_key = re.findall(r'data-target="([^"]+)"', big.text)[-1]
-    too_big = browser.request("POST", f"/audit/targets/{big_key}/sweep", data={"csrf_token": browser.get("/audit/").csrf(), "authorized": "yes"})
+    too_big = browser.request("POST", f"/audit/targets/{big_key}/sweep", data={"csrf_token": browser.get("/audit/").csrf()})
     check("A sweep of more than a /24 is refused with the reason", too_big.status == 400 and "at most 256" in too_big.json()["error"])
     removed = browser.post(f"/audit/targets/{big_key}/remove", {})
     check("A target network can be removed", "target network removed" in flashes(removed))
@@ -339,8 +337,6 @@ def run(base, here_ip, lab_ip, setup_token):
     check("Learned sender confirmed", "sender confirmed" in flashes(confirmed))
 
     section("Step 4: standards, probe choice, own rules")
-    no_auth = browser.post("/audit/launch", {"mode": "standard", "pack": "pci-cde-isolation"})
-    check("Launch without the permission tick is refused", "Tick the authorisation box" in flashes(no_auth))
     with SimulatedFirewall(here_ip, here_ip, log_port, here_ip, DOC_CDE):
         report, html = run_to_report(browser, "PCI DSS CDE isolation (all probes)", {"mode": "standard", "pack": "pci-cde-isolation"})
     if report:
@@ -399,13 +395,13 @@ def run(base, here_ip, lab_ip, setup_token):
             targets = {d["destination_host"] for d in details}
             check(f"{key}: only the ticked probe was sent", {d["protocol"] for d in details} == {protocol}
                   and len(details) == ports * len(targets), f"{len(details)} attempts to {len(targets)} host(s)")
-    unavailable = browser.post("/audit/launch", {"mode": "standard", "pack": "pci-cde-egress", "authorized": "yes"})
+    unavailable = browser.post("/audit/launch", {"mode": "standard", "pack": "pci-cde-egress"})
     check("A standard that does not fit this network explains why", "Run with the local probe inside a CDE zone" in flashes(unavailable), flashes(unavailable))
 
     section("Cancel and one run at a time")
     job, _ = launch(browser, {"mode": "standard", "pack": "nist-sc7-boundary"})
-    busy = browser.post("/audit/launch", {"mode": "standard", "pack": "pci-cde-isolation", "authorized": "yes"})
-    check("A second launch while one runs is refused with the reason", "Another assessment is running" in flashes(busy), flashes(busy))
+    busy = browser.post("/audit/launch", {"mode": "standard", "pack": "pci-cde-isolation"})
+    check("A second launch while one runs is refused with the reason", "Another audit is still running" in flashes(busy), flashes(busy))
     if job:
         browser.request("POST", f"/jobs/{job}/cancel", data={"csrf_token": browser.get(f"/jobs/{job}").csrf()})
         final = wait_job(browser, job, 60)
@@ -415,7 +411,7 @@ def run(base, here_ip, lab_ip, setup_token):
     history = browser.get("/assessments/")
     rows = re.findall(r'/assessments/(\d+)/delete', history.text)
     check("History lists every finished audit", len(rows) >= 7, len(rows))
-    check("History shows verdicts", "Violation" in history.text and "Enforced" in history.text)
+    check("History shows verdicts", "FAILED" in history.text and "PASSED" in history.text)
     check("The cancelled run is listed without a report", "no report" in history.text)
     first = rows[-1]
     deleted = browser.post(f"/assessments/{first}/delete", {}, page="/assessments/")

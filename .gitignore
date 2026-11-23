@@ -34,13 +34,21 @@ deliverables/
 
 # Container lab local state
 
-lab/office/.office-admin
+lab/.office-admin
+lab/firewall-rules.txt
 
 # Test run outputs and local test data
 reports/
 .test-data/
 data/
 
-# Editor settings
+# Editor and OS files
 .vscode/
 .idea/
+*.swp
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# Local Claude/assistant settings
+.claude/

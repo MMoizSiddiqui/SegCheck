@@ -54,7 +54,10 @@
     gauge.classList.toggle("is-empty", !exercised || rate === 0);
     const number = document.querySelector("#gauge-number");
     if (exercised) UI.countTo(number, rate, { decimals: 0, suffix: "%" }); else number.textContent = "—";
-    document.querySelector("#gauge-sub").textContent = exercised ? `${outcomes.pass} of ${exercised} checks passed · ${outcomes.fail} failed · ${outcomes.inconclusive} no answer` : "no checks run yet";
+    // Two short lines: one long line was cut off at the gauge's edges.
+    document.querySelector("#gauge-sub").textContent = exercised ? `${outcomes.pass} of ${exercised} checks passed` : "no checks run yet";
+    const sub2 = document.querySelector("#gauge-sub2");
+    if (sub2) sub2.textContent = exercised ? `${outcomes.fail} failed · ${outcomes.inconclusive} no answer` : "";
     const legend = document.querySelector("#posture-legend");
     legend.replaceChildren();
     const total = KEYS.reduce((sum, key) => sum + outcomes[key], 0);
@@ -242,7 +245,7 @@
     later(() => document.querySelector("#pci-meter").style.setProperty("width", `${percent}%`));
     document.querySelector("#pci-meter-label").textContent = info.cde_zones.length
       ? `${tested} of ${total} out-of-scope zones exercised against the CDE · ${info.cde_checks_active} CDE checks`
-      : "Classify at least one zone as CDE in Network environment.";
+      : "Add a target network of kind 'Card data environment' in New audit, Step 2.";
     const list = document.querySelector("#pci-sources");
     list.replaceChildren();
     const testedMap = Object.fromEntries(info.tested_sources.map(item => [item.zone, item.last_tested]));
@@ -280,11 +283,33 @@
     }
   }
 
+  /* ---- Check results card: total, a live proportion bar and the legend ---- */
+  function results(totals) {
+    const bar = document.querySelector("[data-results-bar]");
+    if (!bar) return;
+    const value = (key) => Number(totals[key] ?? bar.dataset[key]) || 0;
+    const fail = value("fail"), pass = value("pass"), inconclusive = value("inconclusive");
+    const sum = Math.max(1, fail + pass + inconclusive);
+    bar.querySelector(".seg-fail").style.width = `${fail / sum * 100}%`;
+    bar.querySelector(".seg-pass").style.width = `${pass / sum * 100}%`;
+    bar.querySelector(".seg-inconclusive").style.width = `${inconclusive / sum * 100}%`;
+    bar.setAttribute("aria-label", `${fail} failed, ${pass} passed, ${inconclusive} no answer`);
+    const total = document.querySelector('[data-results="total"]');
+    if (total && totals.total !== undefined) UI.countTo(total, Number(totals.total) || 0);
+    const foot = document.querySelector("[data-results-foot]");
+    if (foot) {
+      const [f, p, i] = foot.querySelectorAll("b");
+      f.textContent = fail; p.textContent = pass; i.textContent = inconclusive;
+    }
+  }
+  results({});
+
   async function poll() {
     if (document.hidden) { setTimeout(poll, 5000); return; }
     try {
       const data = await UI.json("/api/dashboard");
       for (const node of document.querySelectorAll("[data-metric]")) UI.countTo(node, Number(data.metrics[node.dataset.metric]) || 0);
+      results(data.results || {});
       const insights = data.insights;
       posture(insights.outcomes);
       donut(insights.outcomes);

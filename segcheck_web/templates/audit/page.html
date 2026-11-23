@@ -44,7 +44,7 @@
 
     <details class="step-edit" {% if not here or not here.present %}open{% endif %}>
         <summary>{{ 'Change where you are' if here else 'Set where you are' }}</summary>
-        <form method="post" action="{{ url_for('audit.here') }}" class="step-form" data-here-form>
+        <form method="post" action="{{ url_for('audit.here') }}" class="step-form" data-here-form data-autosave>
             <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
             {% if detected %}
             <p class="hint">SegCheck found these networks on this PC. The one with a gateway is usually your Wi-Fi or Ethernet.</p>
@@ -78,9 +78,14 @@
                     <label>Gateway (optional) <input name="gateway" class="mono" data-field="gateway" maxlength="45" value="{{ here.gateway if here else first.get('gateway', '') }}"></label>
                 </div>
             </details>
-            <button type="submit" class="primary">{{ 'Save Step 1' if here else 'Use this network' }}</button>
+            <button type="submit" class="primary" data-autosave-button>{{ 'Save Step 1' if here else 'Use this network' }}</button>
         </form>
     </details>
+    <div class="step-save">
+        <small class="muted">Changes in this step are saved automatically.</small>
+        <button type="button" class="primary-action" data-step-finish="1" data-next="2" data-done="{{ 'yes' if here else 'no' }}"
+                data-waiting="Choose the network this PC is in first.">Save Step 1 and continue →</button>
+    </div>
 </section>
 
 <!-- ================= STEP 2 ================= -->
@@ -113,7 +118,6 @@
         <div class="discover">
             <div class="row">
                 <button type="button" class="ghost-button" data-known>Show hosts this PC already knows</button>
-                <label class="authorization-check inline-check"><input type="checkbox" data-sweep-ok> <span>I may ping every address in {{ here.cidr }}</span></label>
                 <button type="button" class="ghost-button" data-sweep>Ping sweep</button>
             </div>
             <form method="post" action="{{ url_for('audit.add_hosts', zone_key=here.key) }}" class="found" data-found hidden>
@@ -131,18 +135,27 @@
         </form>
     </article>
 
+    {% if data.targets %}
+    <div class="net-grid-head"><h3>Target networks <span class="muted">· {{ data.targets|length }}</span></h3>
+        <p class="hint">Only the hosts listed on each network are tested. Add hosts by typing them, or let SegCheck find them.</p></div>
+    {% endif %}
+    <div class="net-grid">
     {% for target in data.targets %}
-    <article class="target-card" data-target="{{ target.key }}"
+    {% set prefix = target.cidr.split('/')[0].rsplit('.', 1)[0] if '.' in target.cidr else '' %}
+    <article class="target-card net-tile" data-kind="{{ target.type }}" data-target="{{ target.key }}"
              data-known-url="{{ url_for('audit.known', zone_key=target.key) }}" data-sweep-url="{{ url_for('audit.sweep', zone_key=target.key) }}"
              data-add-url="{{ url_for('audit.add_hosts', zone_key=target.key) }}">
         <div class="target-top">
             <div><h3>{{ target.name }}</h3><span class="mono muted">{{ target.cidr }}</span>
-                <span class="chip {{ 'chip-fail' if target.type == 'cde' else 'chip-violet' }}">{{ types.get(target.type, target.type) }}</span></div>
-            <form method="post" action="{{ url_for('audit.remove_target', zone_key=target.key) }}">
+                <span class="net-kind">{{ types.get(target.type, target.type) }}</span></div>
+            <form method="post" action="{{ url_for('audit.remove_target', zone_key=target.key) }}" class="net-remove">
                 <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                <button type="submit" class="ghost-button small-button" data-confirm="Remove {{ target.name }} and its hosts?">Remove network</button>
+                <button type="submit" class="icon-button" aria-label="Remove {{ target.name }}" title="Remove this network"
+                        data-confirm="Remove {{ target.name }} and its hosts?">×</button>
             </form>
         </div>
+        <div class="net-hosts-label"><span class="net-count {{ 'is-empty' if not target.hosts }}">{{ target.hosts|length }}</span>
+            host{{ '' if target.hosts|length == 1 else 's' }} to test{% if target.gateway %}<span class="muted"> · gateway {{ target.gateway }}</span>{% endif %}</div>
         <div class="host-list">
             {% for host in target.hosts %}
             <form method="post" action="{{ url_for('audit.remove_host', asset_id=host.id) }}" class="host-chip">
@@ -151,52 +164,65 @@
                 <button type="submit" aria-label="Remove {{ host.address }}" title="Remove">×</button>
             </form>
             {% else %}
-            <p class="hint">No hosts yet. Find them or type them below.</p>
+            <p class="net-empty">No hosts yet: nothing on this network will be tested until you add some.</p>
             {% endfor %}
         </div>
-        <div class="discover">
-            <div class="row">
-                <button type="button" class="ghost-button" data-known>Show hosts this PC already knows</button>
-                <label class="authorization-check inline-check"><input type="checkbox" data-sweep-ok> <span>I may ping every address in {{ target.cidr }}</span></label>
-                <button type="button" class="ghost-button" data-sweep>Ping sweep</button>
-            </div>
-            <form method="post" action="{{ url_for('audit.add_hosts', zone_key=target.key) }}" class="found" data-found hidden>
+        <details class="net-add" {% if not target.hosts %}open{% endif %}>
+            <summary><span class="when-closed">+ Add hosts</span><span class="when-open">× Cancel</span></summary>
+            <form method="post" action="{{ url_for('audit.add_hosts', zone_key=target.key) }}" class="row add-hosts" data-pending-form>
                 <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                <p class="found-status" data-found-status></p>
-                <div class="found-list" data-found-list></div>
-                <button type="submit" class="primary" data-found-add>Add ticked hosts</button>
+                <input name="hosts" class="mono" placeholder="{{ ('e.g. ' ~ prefix ~ '.20 ' ~ prefix ~ '.21') if prefix else 'Host IPs, separated by spaces' }}" aria-label="Host addresses to add">
+                <button type="submit" class="ghost-button">Add</button>
             </form>
-            <p class="found-status" data-discover-status role="status"></p>
-        </div>
-        <form method="post" action="{{ url_for('audit.add_hosts', zone_key=target.key) }}" class="row add-hosts">
-            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-            <input name="hosts" class="mono" placeholder="Type host IPs, e.g. 10.30.0.20 10.30.0.21" aria-label="Host addresses to add">
-            <button type="submit" class="ghost-button">Add hosts</button>
-        </form>
+            <div class="discover">
+                <span class="net-or">or find them</span>
+                <div class="row">
+                    <button type="button" class="ghost-button small-button" data-known>Hosts this PC already knows</button>
+                    <button type="button" class="ghost-button small-button" data-sweep>Ping sweep {{ target.cidr }}</button>
+                </div>
+                <form method="post" action="{{ url_for('audit.add_hosts', zone_key=target.key) }}" class="found" data-found hidden>
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                    <p class="found-status" data-found-status></p>
+                    <div class="found-list" data-found-list></div>
+                    <button type="submit" class="primary" data-found-add>Add ticked hosts</button>
+                </form>
+                <p class="found-status" data-discover-status role="status"></p>
+            </div>
+        </details>
     </article>
     {% endfor %}
+    </div>
 
-    <form method="post" action="{{ url_for('audit.targets') }}" class="add-targets">
+    <details class="add-targets-wrap {{ 'is-first' if not data.targets }}" {% if not data.targets %}open{% endif %}>
+    <summary class="add-targets-toggle"><span class="when-closed">+ Add more target networks</span><span class="when-open">× Cancel adding networks</span></summary>
+    <form method="post" action="{{ url_for('audit.targets') }}" class="add-targets" data-pending-form>
         <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <h3>{{ 'Add more target networks' if data.targets else 'Add target networks' }}</h3>
         <p class="hint">One row per network. Fill in as many as you like and save them together. Leave the network empty to derive it from the first host (as a /24).</p>
         <div class="target-rows" data-rows>
-            <div class="target-row-head" aria-hidden="true"><span>Name</span><span>Network</span><span>Kind</span><span>Hosts (optional)</span></div>
+            <div class="target-row-head" aria-hidden="true"><span>Name</span><span>Network</span><span>Kind</span><span>Hosts (optional)</span><span></span></div>
             {% for i in range(3) %}
             <div class="target-row" data-row>
                 <input name="t_name" maxlength="120" placeholder="e.g. Card systems" aria-label="Network name">
                 <input name="t_cidr" class="mono" maxlength="64" placeholder="10.30.0.0/24" aria-label="Network">
                 <select name="t_type" aria-label="Kind of network">{% for key, label in types.items() %}<option value="{{ key }}" {{ 'selected' if key == 'cde' and i == 0 else ('selected' if key == 'custom' and i > 0 else '') }}>{{ label }}</option>{% endfor %}</select>
                 <input name="t_hosts" class="mono" placeholder="10.30.0.20 10.30.0.21" aria-label="Host addresses">
+                <button type="button" class="icon-button" data-remove-row aria-label="Remove this row" title="Remove this row">×</button>
             </div>
             {% endfor %}
         </div>
         <div class="row">
             <button type="button" class="ghost-button" data-add-row>+ Another row</button>
             <span class="spacer"></span>
-            <button type="submit" class="primary">Save target networks</button>
+            <button type="submit" class="ghost-button add-networks-button">+ Add these networks</button>
         </div>
     </form>
+    </details>
+    <div class="step-save">
+        <small class="muted">Changes in this step are saved automatically.</small>
+        <button type="button" class="primary-action" data-step-finish="2" data-next="3" data-done="{{ 'yes' if steps.targets else 'no' }}"
+                data-waiting="Add at least one network with a host to test first.">Save Step 2 and continue →</button>
+    </div>
     {% endif %}
 </section>
 
@@ -209,41 +235,13 @@
     </header>
     {% if not data.targets %}<p class="hint">{{ 'Not needed: you only test hosts in your own network, so no firewall is in between.' if here and here.hosts else 'Do Step 2 first.' }}</p>{% else %}
 
-    {% if fw and fw.kind != 'none' and fw.logging %}
-    {% set live = connectors.get(fw.id) %}
-    {% set port = fw.log_port %}{% set ip = fw.log_listen_ip or here.ip %}
-    <div class="firewall-live" data-device="{{ fw.id }}">
-        <div class="row">
-            <span class="chip device-state {{ 'chip-pass' if live and live.connected else ('chip-inconclusive' if live and live.listening else 'chip-fail') }}">{{ live.error if live and live.error else ('Logs arriving' if live and live.connected else ('Listening, waiting for the first log' if live and live.listening else 'Not listening yet')) }}</span>
-            <span class="mono small">UDP {{ ip }}:{{ port }} · <span class="device-count">{{ live.parsed if live else 0 }}</span> firewall decisions received</span>
-        </div>
-        <p class="small" data-learned {% if not (live and live.learned_sender) %}hidden{% endif %}>Learned the firewall's address from its logs: <strong class="mono" data-learned-ip>{{ live.learned_sender if live else '' }}</strong>.</p>
-        <ol class="device-advice small" {% if not (live and live.advice) %}hidden{% endif %}>{% for tip in (live.advice if live else []) %}<li>{{ tip }}</li>{% endfor %}</ol>
-        <details class="howto" open>
-            <summary>What to set on the firewall (values already filled in)</summary>
-            {% if fw.kind == 'pfsense' %}
-            <ol>
-                <li><strong>pfSense:</strong> Status → System Logs → Settings. Tick <em>Send log messages to remote syslog server</em>. Remote log servers: <code>{{ ip }}:{{ port }}</code>. Remote Syslog Contents: tick <em>Firewall Events</em>. Log message format: <em>BSD (RFC 3164)</em>. Save.<br>
-                    <strong>OPNsense:</strong> System → Settings → Logging / targets → +. Transport <em>UDP(4)</em>, Applications <em>filter (filterlog)</em>, Hostname <code>{{ ip }}</code>, Port <code>{{ port }}</code>, RFC5424 off. Save and Apply.</li>
-                <li>On the rules that block traffic from this network, tick <em>Log packets that are handled by this rule</em>. In pfSense also tick <em>Log packets matched from the default block rules</em> (Status → System Logs → Settings). Apply.</li>
-                <li>Windows may ask whether Python may receive network traffic: choose <em>Allow</em>. The status above turns green with the first log.</li>
-            </ol>
-            {% elif fw.kind == 'iptables' %}
-            <ol>
-                <li>On the Linux firewall, log what is dropped (run as root, before the final drop):<br><code>iptables -A FORWARD -j LOG --log-prefix "SEGCHECK-DROP "</code></li>
-                <li>Send kernel logs to this PC: create <code>/etc/rsyslog.d/90-segcheck.conf</code> with the line <code>kern.* @{{ ip }}:{{ port }}</code>, then <code>systemctl restart rsyslog</code>.</li>
-                <li>Windows may ask whether Python may receive network traffic: choose <em>Allow</em>. The status above turns green with the first log.</li>
-            </ol>
-            {% endif %}
-        </details>
-    </div>
-    {% elif fw %}
-    <p class="hint">{{ 'No firewall (or unknown): attempts go straight through the router. Silence will be reported as unproven, never as passed.' if fw.kind == 'none' else 'Firewall declared without a log feed. Silence will be reported as unproven.' }}</p>
-    {% endif %}
-
+    <h3 class="substep-title"><span class="substep-badge">3a</span> Is there a firewall between this PC and the targets?</h3>
+    {% if fw %}<p class="small substep-chosen">Chosen: <strong>{{ 'No firewall, or unknown' if fw.kind == 'none' else
+        {'pfsense': 'pfSense or OPNsense', 'iptables': 'Linux (iptables / nftables)', 'fortigate': 'Fortinet FortiGate', 'cisco': 'Cisco ASA / Firepower', 'sophos': 'Sophos Firewall', 'mikrotik': 'MikroTik RouterOS', 'other': 'Other firewall (no log feed)'}.get(fw.kind, fw.kind) }}</strong>{{
+        ', logs connected' if fw.kind != 'none' and fw.logging else '' }}.</p>{% endif %}
     <details class="step-edit" {% if not fw %}open{% endif %}>
-        <summary>{{ 'Change the firewall setting' if fw else 'Choose' }}</summary>
-        <form method="post" action="{{ url_for('audit.firewall') }}" class="step-form" data-firewall-form>
+        <summary>{{ 'Change it' if fw else 'Choose' }}</summary>
+        <form method="post" action="{{ url_for('audit.firewall') }}" class="step-form" data-firewall-form data-autosave>
             <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
             <div class="choice-grid two">
                 <label class="choice-card big"><input type="radio" name="mode" value="none" {{ 'checked' if not fw or fw.kind == 'none' }}>
@@ -257,10 +255,50 @@
                         <select name="kind">
                             <option value="pfsense" {{ 'selected' if fw and fw.kind == 'pfsense' }}>pfSense or OPNsense</option>
                             <option value="iptables" {{ 'selected' if fw and fw.kind == 'iptables' }}>Linux (iptables / nftables)</option>
-                            <option value="other" {{ 'selected' if fw and fw.kind == 'other' }}>Other (Fortinet, Cisco, Sophos…), no log feed</option>
+                            <option value="fortigate" {{ 'selected' if fw and fw.kind == 'fortigate' }}>Fortinet FortiGate</option>
+                            <option value="cisco" {{ 'selected' if fw and fw.kind == 'cisco' }}>Cisco ASA / Firepower (FTD)</option>
+                            <option value="sophos" {{ 'selected' if fw and fw.kind == 'sophos' }}>Sophos Firewall (XG / SFOS)</option>
+                            <option value="mikrotik" {{ 'selected' if fw and fw.kind == 'mikrotik' }}>MikroTik RouterOS</option>
+                            <option value="other" {{ 'selected' if fw and fw.kind == 'other' }}>Other (Check Point, Palo Alto, Juniper…), no log feed</option>
                         </select></label>
-                    <label>Firewall's address in this network <input name="firewall_ip" class="mono" maxlength="45" value="{{ fw.log_sender_ip or fw.interface_ip if fw and fw.kind != 'none' else here.gateway }}" placeholder="usually the gateway">
-                        <small>Usually this network's gateway{{ ' (' ~ here.gateway ~ ')' if here.gateway }}.</small></label>
+                    <label>Firewall's address in this network <input name="firewall_ip" class="mono" maxlength="45" value="{{ fw.log_sender_ip or fw.interface_ip if fw and fw.kind != 'none' else here.gateway }}" placeholder="leave empty: learned from its first log">
+                        {% if fw and fw.interface_learned and fw.interface_ip %}<small class="learned-note">✓ Filled in automatically: the firewall's first
+                            log line came from {{ fw.interface_ip }}.</small>{% endif %}
+                        <small>Usually this network's gateway{{ ' (' ~ here.gateway ~ ')' if here.gateway }}. <strong>Not sure? Leave it empty.</strong>
+                            With its logs connected (3b), SegCheck fills it in from the firewall's first log line, because the firewall
+                            sends its logs from this address. Without logs, type it: on Windows, <code>ipconfig</code> shows it as
+                            <em>Default Gateway</em>. Used to recognise the firewall's logs and by the firewall-management check in Step 4.</small></label>
+                </div>
+                <div class="fw-others">
+                    <div class="fw-others-head">
+                        <strong>Its addresses in the other networks</strong>
+                        <span class="chip">Optional</span><span class="chip chip-violet">Only for the firewall-management check</span>
+                    </div>
+                    <div class="fw-others-explain">
+                        <p><strong>What:</strong> a firewall is one box with an address in every network it connects. Here it is
+                            <span data-fw-here-text data-empty="not known yet (the field above is empty: SegCheck fills it in from the firewall's first log, or you type it)">{{ fw.interface_ip if fw and fw.interface_ip and fw.kind != 'none' else "not known yet (the field above is empty: SegCheck fills it in from the firewall's first log, or you type it)" }}</span>; in the
+                            other networks it has other addresses (often the .1 of each, but not always).</p>
+                        <p><strong>Why:</strong> ISO/IEC 27002 8.20 and NIST SC-7 say staff networks must not be able to reach the
+                            firewall's own admin services (SSH, web admin, SNMP). Many firewalls answer them on <em>every</em> address,
+                            so testing only the nearest one can miss a real finding.</p>
+                        <p><strong>What it does, and does not do:</strong> only the Step 4 standard <em>Firewall management plane
+                            protection</em> tries these addresses, and only on the admin ports. It does <strong>not</strong> change how the
+                            firewall's logs reach this PC (3b), and the other standards never treat these addresses as servers.</p>
+                    </div>
+                    <label>The firewall's addresses in the other networks
+                        <input name="other_ips" class="mono" maxlength="400" data-other-ips
+                               value="{{ (fw.other_ips or [])|join(' ') if fw and fw.kind != 'none' else '' }}"
+                               placeholder="e.g. 10.30.0.1 10.50.0.1  (separate with spaces)">
+                        <small>Where to find them: the firewall's interface list (pfSense / OPNsense: <em>Status → Interfaces</em>;
+                            Linux: <code>ip -br addr</code>; FortiGate: <em>Network → Interfaces</em>). Leave empty to test only its address
+                            in this network.</small></label>
+                    {% if fw and fw.suggestions %}
+                    <div class="fw-suggest">
+                        <span class="small muted">Likely addresses of this firewall. Click to add only if you are sure:</span>
+                        {% for s in fw.suggestions %}<button type="button" class="suggest-chip" data-add-address="{{ s.address }}"
+                            title="{{ s.why }}"><span class="mono">+ {{ s.address }}</span> <small>{{ s.network }} · {{ s.why }}</small></button>{% endfor %}
+                    </div>
+                    {% endif %}
                 </div>
                 <label class="authorization-check"><input type="checkbox" name="logs" value="on" {{ 'checked' if not fw or fw.logging }}> <span>Connect its logs (recommended). SegCheck only listens; it never logs in to the firewall or changes it.</span></label>
                 <details class="manual"><summary>Advanced</summary>
@@ -270,9 +308,158 @@
                     </div>
                 </details>
             </div>
-            <button type="submit" class="primary">Save Step 3</button>
+            <button type="submit" class="primary" data-autosave-button>Save firewall choice</button>
         </form>
     </details>
+
+    {% if fw and fw.kind != 'none' and fw.logging %}
+    <h3 class="substep-title"><span class="substep-badge">3b</span> Connect its logs</h3>
+    {% set live = connectors.get(fw.id) %}
+    {% set port = fw.log_port %}{% set ip = fw.log_listen_ip or here.ip %}
+    <div class="firewall-live" data-device="{{ fw.id }}">
+        <div class="row">
+            <span class="chip device-state {{ 'chip-pass' if live and live.connected else ('chip-inconclusive' if live and live.listening else 'chip-fail') }}">{{ live.error if live and live.error else ('Logs arriving' if live and live.connected else ('Listening, waiting for the first log' if live and live.listening else 'Not listening yet')) }}</span>
+            <span class="mono small">UDP {{ ip }}:{{ port }} · <span class="device-count">{{ live.parsed if live else 0 }}</span> firewall decisions received</span>
+        </div>
+        <p class="small" data-learned {% if not (live and live.learned_sender) %}hidden{% endif %}>Learned the firewall's address from its logs: <strong class="mono" data-learned-ip>{{ (live.learned_sender or '') if live else '' }}</strong>.</p>
+        <ol class="device-advice small" {% if not (live and live.advice) %}hidden{% endif %}>{% for tip in (live.advice if live else []) %}<li>{{ tip }}</li>{% endfor %}</ol>
+        <details class="howto" open>
+            <summary>For the firewall's administrator: send its logs to this PC</summary>
+            <p class="lab-note lab-warn" data-fw-preview hidden></p>
+            {% if in_lab and fw.kind == 'iptables' %}<p class="lab-note"><strong>In the PaySecure lab this is already done: nothing to do.</strong>
+                The lab firewall was built sending its logs to {{ ip }}:{{ port }}. The steps below are for a real client.</p>
+            {% elif in_lab %}<p class="lab-note lab-warn"><strong>The PaySecure lab's firewall is Linux.</strong> Choose
+                <em>Linux (iptables / nftables)</em> in 3a for its logs to arrive; the steps below are for a real firewall of this type.</p>{% endif %}
+            <p class="small">SegCheck never logs in to the firewall or changes it; it only listens. To prove that a block really
+                happened, whoever manages the firewall (at a client: their network team) sets it once to send its log lines to
+                this PC. This PC's address and port, <code>{{ ip }}:{{ port }}</code>, are already filled in below: copy them as they are.</p>
+            <div data-fw-steps="pfsense" {% if fw.kind != 'pfsense' %}hidden{% endif %}>
+            <ol>
+                <li><strong>pfSense:</strong> Status → System Logs → Settings. Tick <em>Send log messages to remote syslog server</em>. Remote log servers: <code>{{ ip }}:{{ port }}</code>. Remote Syslog Contents: tick <em>Firewall Events</em>. Log message format: <em>BSD (RFC 3164)</em>. Save.<br>
+                    <strong>OPNsense:</strong> System → Settings → Logging / targets → +. Transport <em>UDP(4)</em>, Applications <em>filter (filterlog)</em>, Hostname <code>{{ ip }}</code>, Port <code>{{ port }}</code>, RFC5424 off. Save and Apply.</li>
+                <li>On the rules that block traffic from this network, tick <em>Log packets that are handled by this rule</em>. In pfSense also tick <em>Log packets matched from the default block rules</em> (Status → System Logs → Settings). Apply.</li>
+                <li><strong>On this PC:</strong> if Windows asks whether Python may receive network traffic, choose <em>Allow</em>.
+                    When the first log arrives, the status above turns green (<em>Logs arriving</em>).</li>
+            </ol>
+            </div>
+            <div data-fw-steps="fortigate" {% if fw.kind != 'fortigate' %}hidden{% endif %}>
+            <ol>
+                <li><strong>Send FortiGate's logs to this PC.</strong> In the FortiGate CLI (or <em>Log &amp; Report → Log Settings →
+                    Remote Logging → Syslog</em>, then set the port in the CLI):<br>
+                    <code>config log syslogd setting</code><br><code>&nbsp;&nbsp;set status enable</code><br>
+                    <code>&nbsp;&nbsp;set server "{{ ip }}"</code><br><code>&nbsp;&nbsp;set port {{ port }}</code><br>
+                    <code>&nbsp;&nbsp;set mode udp</code><br><code>&nbsp;&nbsp;set format default</code><br><code>end</code></li>
+                <li><strong>Log every decision between these networks.</strong> <em>Policy &amp; Objects → Firewall Policy</em>: on each
+                    policy between this PC's network and the targets, set <em>Log Allowed Traffic</em> to <em>All Sessions</em>.
+                    Also log what the implicit deny blocks: <code>config log setting</code> → <code>set fwpolicy-implicit-log enable</code> → <code>end</code>.
+                    For connections to the FortiGate itself (firewall-management check): <code>config log setting</code> →
+                    <code>set local-in-deny-unicast enable</code> → <code>end</code>.</li>
+                <li><strong>On this PC:</strong> if Windows asks whether Python may receive network traffic, choose <em>Allow</em>.
+                    When the first log arrives, the status above turns green (<em>Logs arriving</em>).</li>
+            </ol>
+            </div>
+            <div data-fw-steps="cisco" {% if fw.kind != 'cisco' %}hidden{% endif %}>
+            <ol>
+                <li><strong>Send the ASA's logs to this PC.</strong> In configuration mode, using the name of the interface that
+                    faces this PC (e.g. <code>inside</code>):<br>
+                    <code>logging enable</code><br><code>logging timestamp</code><br><code>logging trap informational</code><br>
+                    <code>logging host inside {{ ip }} udp/{{ port }}</code></li>
+                <li><strong>Log the access-list decisions.</strong> Denies by an access list are logged by default (message 106023).
+                    To also log what is permitted, add <code>log</code> to the permit entries, e.g.
+                    <code>access-list INSIDE_IN extended permit tcp any host 10.30.0.10 eq 443 log</code>.<br>
+                    <em>Firepower (FTD) managed by FMC:</em> <em>Devices → Platform Settings → Syslog → Syslog Servers</em>: add {{ ip }},
+                    UDP {{ port }}; then in the access control policy, on each rule tick <em>Log at Beginning of Connection</em>
+                    with <em>Syslog Server</em> as destination.</li>
+                <li><strong>On this PC:</strong> if Windows asks whether Python may receive network traffic, choose <em>Allow</em>.
+                    When the first log arrives, the status above turns green (<em>Logs arriving</em>).</li>
+            </ol>
+            </div>
+            <div data-fw-steps="sophos" {% if fw.kind != 'sophos' %}hidden{% endif %}>
+            <ol>
+                <li><strong>Send Sophos Firewall's logs to this PC.</strong> <em>System services → Log settings → Add</em> (syslog server):
+                    name <code>SegCheck</code>, IP <code>{{ ip }}</code>, port <code>{{ port }}</code>, facility <em>DAEMON</em>,
+                    severity <em>Information</em>, format <em>Device standard format</em>. Save, then in the log list tick
+                    <em>Firewall</em> (firewall rules, invalid traffic) for this server.</li>
+                <li><strong>Log each rule's traffic.</strong> <em>Rules and policies → Firewall rules</em>: open each rule between this
+                    PC's network and the targets and tick <em>Log firewall traffic</em>. Dropped traffic that matches no rule is logged
+                    as the default drop.</li>
+                <li><strong>On this PC:</strong> if Windows asks whether Python may receive network traffic, choose <em>Allow</em>.
+                    When the first log arrives, the status above turns green (<em>Logs arriving</em>).</li>
+            </ol>
+            </div>
+            <div data-fw-steps="mikrotik" {% if fw.kind != 'mikrotik' %}hidden{% endif %}>
+            <ol>
+                <li><strong>Send the router's firewall log to this PC.</strong> In the terminal (or <em>System → Logging</em> in WinBox):<br>
+                    <code>/system logging action add name=segcheck target=remote remote={{ ip }} remote-port={{ port }}</code><br>
+                    <code>/system logging add topics=firewall action=segcheck</code></li>
+                <li><strong>Log the forward rules, with a name SegCheck can read.</strong> Drop rules:
+                    <code>/ip firewall filter set [find chain=forward action=drop] log=yes log-prefix="SEGCHECK-DROP"</code>.
+                    Allow rules (optional, name each one): e.g. <code>/ip firewall filter set 5 log=yes log-prefix="SEGCHECK-ACCEPT-staff-web"</code>.
+                    For connections to the router itself (firewall-management check), the input chain too:
+                    <code>/ip firewall filter set [find chain=input action=drop] log=yes log-prefix="SEGCHECK-DROP"</code>.</li>
+                <li><strong>On this PC:</strong> if Windows asks whether Python may receive network traffic, choose <em>Allow</em>.
+                    When the first log arrives, the status above turns green (<em>Logs arriving</em>).</li>
+            </ol>
+            </div>
+            <div data-fw-steps="iptables" {% if fw.kind != 'iptables' %}hidden{% endif %}>
+            <ol>
+                <li><strong>Make the firewall write a log line for every packet it blocks.</strong> On the Linux firewall, as root,
+                    add this rule just before its final "drop" rule:<br><code>iptables -A FORWARD -j LOG --log-prefix "SEGCHECK-DROP "</code><br>
+                    (with nftables: <code>nft add rule inet filter forward log prefix "SEGCHECK-DROP "</code>, before the drop)<br>
+                    <em>Also for connections to the firewall itself</em> (used by the firewall-management check): add the same rule to the
+                    INPUT chain, just before its final drop: <code>iptables -A INPUT -j LOG --log-prefix "SEGCHECK-DROP "</code>
+                    (nftables: <code>nft add rule inet filter input log prefix "SEGCHECK-DROP "</code>).</li>
+                <li><strong>Send those log lines to this PC.</strong> On the firewall, create the file <code>/etc/rsyslog.d/90-segcheck.conf</code>
+                    containing the line <code>kern.* @{{ ip }}:{{ port }}</code> (meaning: send firewall messages to {{ ip }}, port {{ port }}),
+                    then restart the log service: <code>systemctl restart rsyslog</code>.</li>
+                <li><strong>On this PC:</strong> if Windows asks whether Python may receive network traffic, choose <em>Allow</em>.
+                    When the first log arrives, the status above turns green (<em>Logs arriving</em>).</li>
+            </ol>
+            </div>
+            <div data-fw-steps="other" hidden>
+                <p class="small">SegCheck cannot read this firewall's logs. Save firewall choice with <em>Other</em> and the audit still runs,
+                    without log proof: anything that answers is a FAIL, and silence is reported as <em>not proven</em>, never as passed.</p>
+            </div>
+        </details>
+    </div>
+    {% elif fw %}
+    <p class="hint">{{ 'No firewall (or unknown): attempts go straight through the router. Silence will be reported as unproven, never as passed.' if fw.kind == 'none' else 'Firewall declared without a log feed. Silence will be reported as unproven.' }}</p>
+    {% endif %}
+
+
+    {% if fw and fw.kind != 'none' %}
+    <div class="rules-export">
+        <h3 class="substep-title"><span class="substep-badge">{{ '3c' if fw.logging else '3b' }}</span> Firewall rules (optional): name the rule behind each result</h3>
+        {% if data.ruleset %}
+        <p class="small"><span class="chip chip-pass">{{ data.ruleset.count }} rule(s) loaded</span>
+            <span class="mono">{{ data.ruleset.name }}</span> · {{ 'pfSense/OPNsense config.xml' if data.ruleset.kind == 'pfsense' else 'Linux iptables-save' }} · {{ data.ruleset.loaded_at }}</p>
+        <form method="post" action="{{ url_for('audit.firewall_rules_remove') }}" class="inline-form">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <button type="submit" class="ghost-button small-button">Remove the rule export</button></form>
+        {% elif fw.kind not in ['pfsense', 'iptables'] %}
+        <p class="small">For this firewall SegCheck names the rule from its logs: the policy name (FortiGate), the access list
+            (Cisco), the rule name (Sophos) or the log prefix (MikroTik). A rule export is read for pfSense/OPNsense
+            (config.xml) and Linux (iptables-save) only, so you can skip this box.</p>
+        {% else %}
+        <p class="small">Load a read-only copy of the firewall's rules. SegCheck checks them in the firewall's own order (first match
+            wins) and the report names the rule that let a forbidden path through, even without logs. pfSense/OPNsense:
+            <em>Diagnostics → Backup &amp; Restore → Download configuration</em> (config.xml). Linux: the output of <code>iptables-save</code>.</p>
+        {% endif %}
+        <form method="post" action="{{ url_for('audit.firewall_rules') }}" enctype="multipart/form-data" class="step-form rules-export-form" data-pending-form>
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <div class="field-grid">
+                <label>Rule export file <input type="file" name="export" accept=".xml,.txt,.rules,text/plain,text/xml"></label>
+                <label>…or paste it <textarea name="export_text" rows="3" class="mono" placeholder="iptables-save output, or config.xml"></textarea></label>
+            </div>
+            <button type="submit" class="ghost-button">{{ 'Replace the rule export' if data.ruleset else 'Load firewall rules' }}</button>
+        </form>
+    </div>
+    {% endif %}
+    <div class="step-save">
+        <small class="muted">Changes in this step are saved automatically.</small>
+        <button type="button" class="primary-action" data-step-finish="3" data-next="4" data-done="{{ 'yes' if steps.firewall else 'no' }}"
+                data-waiting="Choose whether there is a firewall (3a) first.">Save Step 3 and continue →</button>
+    </div>
     {% endif %}
 </section>
 
@@ -280,10 +467,14 @@
 <section class="step-card {{ 'is-locked' if not (steps.here and steps.targets and steps.firewall) }}" id="step-4">
     <header class="step-head">
         <span class="step-badge">Step 4</span>
-        <div><h2>Checks &amp; launch</h2><p>Pick a standard (or your own rules), pick which probes to send, tick, launch.</p></div>
+        <div><h2>Checks &amp; launch</h2><p>Pick a standard (or your own rules), choose which probes to send, then launch.</p></div>
     </header>
+    {% if running %}<div class="running-banner" role="status"><span class="live-dot" aria-hidden="true"></span>
+        <span><strong>An audit is running now</strong> ({{ running.completed }} of {{ running.total }} attempts done). A new one can start
+            when it has finished or been cancelled.</span>
+        <a class="primary-action" href="{{ url_for('jobs.detail', job_id=running.id) }}">Open its progress →</a></div>{% endif %}
     {% if not (steps.here and steps.targets and steps.firewall) %}<p class="hint">Finish Steps 1–3 first.</p>{% else %}
-    <form method="post" action="{{ url_for('audit.launch') }}" class="step-form" data-launch-form data-max="{{ max_attempts }}">
+    <form method="post" action="{{ url_for('audit.launch') }}" class="step-form" data-launch-form data-max="{{ max_attempts }}" data-logs="{{ '1' if data.firewall and data.firewall.logging else '0' }}">
         <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <div class="tabs" role="tablist">
             <label class="tab"><input type="radio" name="mode" value="standard" checked><span>A standard</span></label>
@@ -291,12 +482,22 @@
         </div>
 
         <div data-mode-panel="standard">
+            <div class="scope-switch" role="radiogroup" aria-label="How many standards">
+                <label class="choice-card"><input type="radio" name="scope" value="one" checked>
+                    <span class="choice-body"><strong>One standard</strong><small>Test exactly what one standard asks for.</small></span></label>
+                <label class="choice-card"><input type="radio" name="scope" value="several">
+                    <span class="choice-body"><strong>Several standards in one run</strong><small>Tick the standards. Each probe is sent once;
+                        the report then judges every standard and control separately (one can pass while another fails).</small></span></label>
+            </div>
+            <p class="hint small" data-scope-hint hidden><button type="button" class="ghost-button small-button" data-select-all-packs>Tick every applicable standard</button></p>
+            {% set zone_names = {} %}{% for t in data.targets %}{% set _ = zone_names.update({t.key: t.name}) %}{% endfor %}
             {% for family, label in families.items() %}
             {% set rows = packs|selectattr('pack.family', 'equalto', family)|list %}
             {% if rows %}
             <h3 class="family-title">{{ label }}</h3>
             <div class="pack-grid">
-                {% for row in rows %}{% set p = row.pack %}{% set st = row.status %}
+                {% for row in rows %}{% set p = row.pack %}{% set st = row.status %}{% set noun = ('firewall address', 'firewall addresses') if p.targets == 'devices' else ('system', 'systems') %}
+                <div class="pack-item">
                 <label class="pack-card {{ 'is-off' if not st.ready }}">
                     <input type="radio" name="pack" value="{{ p.key }}" {{ 'disabled' if not st.ready }} data-targets="{{ st.targets|length }}" data-target-list="{{ st.targets|map(attribute='address')|join(', ') }}"
                         {% if st.ready and loop.first and family == 'pci' %}checked{% endif %}>
@@ -309,12 +510,75 @@
                     </span>
                     <span class="pack-groups" hidden>{% for g in row.groups %}<span data-group="{{ g.key }}" data-cost="{{ g.cost }}" data-label="{{ g.label }}" data-detail="{{ g.detail }}"></span>{% endfor %}</span>
                 </label>
+                <button type="button" class="pack-info" data-pack-open="pack-dlg-{{ p.key }}" aria-haspopup="dialog" title="What this checks, in full">
+                    <span class="pack-info-icon" aria-hidden="true">i</span>
+                    <span class="pack-info-label">What it tests</span>
+                    {% if st.ready %}<span class="pack-info-stat">{{ st.targets|length }} {{ noun[0] if st.targets|length == 1 else noun[1] }}</span><span class="pack-info-stat is-alt" title="{{ st.attempts }} single connection tests: every port on every system, tried once">{{ st.attempts }} checks</span>
+                    {% else %}<span class="pack-info-stat is-off">why not here</span>{% endif %}
+                    <span class="pack-info-arrow" aria-hidden="true">→</span>
+                </button>
+                <dialog class="pack-drawer" id="pack-dlg-{{ p.key }}" aria-labelledby="pack-dlg-{{ p.key }}-title">
+                    <header class="pack-drawer-head">
+                        <div>
+                            <span class="pack-meta">{{ p.standard }} · {{ p.controls }}</span>
+                            <h3 id="pack-dlg-{{ p.key }}-title">{{ p.title }}</h3>
+                            {% if st.ready %}<span class="chip chip-pass">Available from this PC</span>
+                            {% else %}<span class="chip chip-inconclusive">Not available from this PC</span>{% endif %}
+                        </div>
+                        <button type="button" class="pack-drawer-close" data-pack-close aria-label="Close">×</button>
+                    </header>
+                    <div class="pack-drawer-body">
+                        <section class="pack-explain">
+                            <h4>What the standard asks</h4><p>{{ p.explain.asks }}</p>
+                            <h4>Why it matters</h4><p>{{ p.explain.why }}</p>
+                            <div class="pack-outcomes">
+                                <div class="pack-outcome is-pass"><h4>PASS means</h4><p>{{ p.explain.pass }}</p></div>
+                                <div class="pack-outcome is-fail"><h4>FAIL means</h4><p>{{ p.explain.fail }}</p></div>
+                            </div>
+                        </section>
+                        {% if st.ready %}
+                        <section>
+                            <h4>What SegCheck will try</h4>
+                            <div class="pack-stats">
+                                <div><strong>{{ st.targets|length }}</strong><span>{{ noun[0] if st.targets|length == 1 else noun[1] }}</span></div>
+                                <div><strong>{{ row.groups|length }}</strong><span>kinds of service</span></div>
+                                <div><strong>{{ st.attempts }}</strong><span>single check{{ '' if st.attempts == 1 else 's' }}</span></div>
+                            </div>
+                            <p class="small">One check = SegCheck tries to open one port on one system, once. {{ st.targets|length }} {{ noun[0] if st.targets|length == 1 else noun[1] }} × {{ (st.attempts // st.targets|length) if st.targets else 0 }} ports = {{ st.attempts }} checks. The ports are grouped into the kinds of service listed below (remote admin, databases, file sharing…).</p>
+                            <p class="small muted">From this PC ({{ data.here.ip }}, {{ data.here.name }}), every attempt is expected to be <strong>blocked</strong>.</p>
+                            <table class="pack-target-table">
+                                <thead><tr><th>Address</th><th>{{ 'What it is' if p.targets == 'devices' else 'System' }}</th><th>Network</th></tr></thead>
+                                <tbody>{% for t in st.targets %}<tr><td class="mono">{{ t.address }}</td><td>{{ t.name if t.name != t.address else '—' }}</td><td>{{ zone_names.get(t.zone, t.zone) }}</td></tr>{% endfor %}</tbody>
+                            </table>
+                            <h4>On each system it tries</h4>
+                            <ul class="pack-probe-list">
+                                {% for g in row.groups %}<li>
+                                    <div class="pack-probe-head"><strong>{{ g.label }}</strong><span class="chip">{{ g.protocol|upper }}</span></div>
+                                    <div class="pack-ports">{% for port in g.ports %}<span class="port">{{ port }}</span>{% else %}<span class="port">echo</span>{% endfor %}</div>
+                                    <p class="small muted">{{ g.why }}</p>
+                                </li>{% endfor %}
+                            </ul>
+                            <p class="small muted">Unticking a probe type under "Which probes" leaves it out.</p>
+                        </section>
+                        {% else %}
+                        <section class="pack-unavailable">
+                            <h4>Not available from where this PC is</h4>
+                            <p>{{ st.reason }}</p>
+                        </section>
+                        {% endif %}
+                    </div>
+                    <footer class="pack-drawer-foot">
+                        {% if st.ready %}<button type="button" class="primary" data-pack-use="{{ p.key }}">Use this standard</button>{% endif %}
+                        <button type="button" class="ghost-button" data-pack-close>Close</button>
+                    </footer>
+                </dialog>
+                </div>
                 {% endfor %}
             </div>
             {% endif %}
             {% endfor %}
             <h3 class="family-title">Which probes</h3>
-            <p class="hint">All are on by default. Untick what you don't need; only probes the chosen standard uses are sent.</p>
+            <p class="hint" data-probes-hint>All are on by default. Untick what you don't need; only probes the chosen standard uses are sent.</p>
             <div class="group-grid">
                 {% set seen = [] %}
                 {% for row in packs %}{% for g in row.groups %}{% if g.key not in seen %}{% set _ = seen.append(g.key) %}
@@ -355,10 +619,18 @@
                     </select>
                     <select name="r_must" aria-label="Must"><option value="deny">be blocked</option><option value="allow">work (approved)</option></select>
                     <button type="button" class="ghost-button small-button" data-remove-rule aria-label="Remove rule">×</button>
-                    <input name="r_targets" class="mono typed-targets" data-typed-targets placeholder="10.30.0.20  10.30.0.10-20  10.30.0.0/28" aria-label="Target addresses, ranges or subnets" hidden>
+                    <span class="typed-targets-box" data-typed-box hidden>
+                        <input name="r_targets" class="mono typed-targets" data-typed-targets placeholder="10.30.0.20  10.30.0.10-20  10.30.0.0/28" aria-label="Target addresses, ranges or subnets">
+                        <small class="field-help">Formats: <code>10.30.0.20</code> · <code>10.30.0.20 10.30.0.21</code> · range <code>10.30.0.10-20</code>
+                            or <code>10.30.0.10-10.30.0.40</code> · subnet <code>10.30.0.0/28</code>. Separate with spaces or commas; at most 256 addresses.</small>
+                        <small class="field-error" data-targets-error role="alert" hidden></small>
+                    </span>
                     <span class="custom-ports" data-custom-ports hidden>
                         <select name="r_protocol" aria-label="Protocol"><option value="tcp">TCP</option><option value="udp">UDP</option></select>
-                        <input name="r_ports" class="mono" placeholder="8080, 9000-9010" aria-label="Ports">
+                        <input name="r_ports" class="mono" placeholder="8080, 9000-9010" aria-label="Ports" aria-describedby="ports-help">
+                        <small class="field-help" id="ports-help">Formats: one port <code>8080</code> · several <code>80, 443</code> (commas or spaces) ·
+                            range <code>9000-9010</code> (no spaces around the dash) · mix <code>22, 80, 8000-8100</code>. Ports 1–65535, at most 400 per rule.</small>
+                        <small class="field-error" data-ports-error role="alert" hidden></small>
                     </span>
                     <input name="r_reason" class="rule-reason" maxlength="500" placeholder="Reason (optional, shown in the report), e.g. HR must not reach card data — PCI DSS 1.3.1" aria-label="Reason">
                     <p class="rule-preview" data-rule-preview></p>
@@ -369,11 +641,11 @@
 
         <div class="launch-bar">
             <div><span class="kpi-label">Attempts</span><strong data-attempts>–</strong><small data-eta></small></div>
-            <label class="authorization-check"><input type="checkbox" name="authorized" value="yes" required>
-                <span>I have written permission to test these targets from {{ here.ip }}.</span></label>
             <button type="submit" class="primary launch-button">Launch audit</button>
         </div>
-        <p class="hint small">The run stops by itself: every attempt times out after 1 second, at most {{ max_attempts }} attempts. You can cancel at any time; a cancelled run never produces a half report.</p>
+        <p class="hint small">Only test networks you own or are allowed to test. Attempts run one after another. An answer is final; a silent attempt is tried once more with a longer wait
+            (1–3 s, then 3–6 s, adapted to how fast this network answers), unless the firewall's log already shows it blocked that
+            attempt. At most {{ max_attempts }} attempts. You can cancel at any time; a cancelled run never produces a half report.</p>
     </form>
     {% endif %}
 </section>

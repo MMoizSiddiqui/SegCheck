@@ -54,6 +54,7 @@ def main(argv=None) -> int:
     parser.add_argument("--port", type=int, default=5050)
     parser.add_argument("--no-upgrade", action="store_true", help="Skip `db upgrade`")
     parser.add_argument("--host", default="127.0.0.1", help="Listen address (default loopback). Only use 0.0.0.0 inside an isolated container.")
+    parser.add_argument("--no-banner", action="store_true", help="Hide the review-instance banner (the office lab, a demo installation of its own)")
     args = parser.parse_args(argv)
 
     data_dir = Path(args.data_dir).expanduser()
@@ -70,7 +71,7 @@ def main(argv=None) -> int:
     from segcheck_web import create_app
 
     app = create_app({
-        "SEGCHECK_REVIEW_MODE": True,
+        "SEGCHECK_REVIEW_MODE": not args.no_banner,
         # Loopback HTTP review: Chromium accepts Secure cookies on localhost,
         # but keep the production default (Secure) unchanged elsewhere.
         "SESSION_COOKIE_SECURE": os.environ.get("SEGCHECK_REVIEW_INSECURE_COOKIE") != "1",
@@ -78,7 +79,7 @@ def main(argv=None) -> int:
 
     if not args.no_upgrade:
         with app.app_context():
-            upgrade(directory=str(PROJECT_ROOT / "migrations"))
+            upgrade(directory=str(PROJECT_ROOT / "segcheck_web" / "migrations"))
 
     if args.host not in {"127.0.0.1", "::1"} and os.environ.get("SEGCHECK_CONTAINER") != "1":
         raise SystemExit("Refusing a non-loopback listen address outside the SegCheck lab container.")

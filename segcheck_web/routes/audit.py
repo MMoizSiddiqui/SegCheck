@@ -1,4 +1,5 @@
 """New audit: Step 1 where you are, Step 2 targets, Step 3 firewall, Step 4 checks and launch."""
+import os
 import secrets
 from itertools import zip_longest
 
@@ -10,13 +11,13 @@ from segcheck_web.extensions import db, login_manager
 from segcheck_web.services import audit_setup as audit
 from segcheck_web.services import history
 from segcheck_web.services.assessment_execution import MAX_WEB_PROBE_ATTEMPTS, AssessmentExecutionError
-from segcheck_web.services.assessment_jobs import JobBusy, create_job, start_worker
+from segcheck_web.services.assessment_jobs import JobBusy, create_job, running_job, start_worker
 from segcheck_web.services.assessment_plan import build_plan
 from segcheck_web.services.environment import EnvironmentError, settings
 from segcheck_web.services.firewall_connector import evidence_directory, registry
 from segcheck_web.services.policy_import import PolicyImportError, import_policy_content
 from segcheck_web.services.policy_lifecycle import transition_policy_status
-from segcheck_web.services.standard_packs import FAMILIES, PACKS, PROBE_GROUPS, PackError, build_pack_documents, evaluate_pack
+from segcheck_web.services.standard_packs import FAMILIES, PACKS, PROBE_GROUPS, PackError, build_multi_document, build_pack_documents, evaluate_pack
 
 audit_bp = Blueprint("audit", __name__, url_prefix="/audit")
 
@@ -48,6 +49,7 @@ def _detected():
 
 @audit_bp.get("/")
 def page():
+    audit.adopt_learned_address(registry(current_app._get_current_object()).status())
     data = audit.state()
     _, environment = settings()
     packs = []
@@ -58,7 +60,8 @@ def page():
     connectors = registry(current_app._get_current_object()).status()
     return render_template("audit/page.html", data=data, detected=_detected(), types=audit.NETWORK_TYPES,
                            services=audit.SERVICES, packs=packs, families=FAMILIES, connectors=connectors,
-                           max_attempts=MAX_WEB_PROBE_ATTEMPTS)
+                           max_attempts=MAX_WEB_PROBE_ATTEMPTS, in_lab=os.environ.get("SEGCHECK_CONTAINER") == "1",
+                           running=running_job())
 
 
 # ---------------- Step 1 ----------------
@@ -99,6 +102,8 @@ def add_hosts(zone_key):
     form = request.form
     try:
         addresses = audit._hosts_from_text(" ".join(form.getlist("hosts")))
+        if not addresses:
+            raise EnvironmentError("Type at least one host address first, e.g. 10.30.0.20 (several: separate with spaces).")
         names = {a: n for a, n in zip(form.getlist("host_for_name"), form.getlist("host_name")) if n}
         count = audit.add_hosts(zone_key, addresses, names)
         flash(f"Step 2: added {count} host(s)." if count else "Step 2: those hosts were already in the list.", "success")
@@ -165,8 +170,6 @@ def sweep(zone_key):
     network, environment = _target_network(zone_key)
     if network is None:
         return jsonify({"error": "That target network no longer exists. Reload the page."}), 404
-    if request.form.get("authorized") != "yes":
-        return jsonify({"error": "Tick the box to confirm you are allowed to ping this network."}), 400
     try:
         # Discovery only builds a list to tick; the operating system picks the route. The audit's own
         # attempts are always bound to this PC's Step 1 address.
@@ -186,7 +189,8 @@ def firewall():
     form = request.form
     try:
         result = audit.set_firewall(form.get("mode", ""), form.get("kind", "pfsense"), form.get("firewall_ip", ""),
-                                    form.get("logs") == "on", None, form.get("listen_ip", ""), form.get("sender_ip", ""))
+                                    form.get("logs") == "on", None, form.get("listen_ip", ""), form.get("sender_ip", ""),
+                                    form.get("other_ips", ""))
         _sync()
         if form.get("mode") == "none":
             flash("Step 3 saved: no firewall. Silence will be reported as unproven, never as passed.", "success")
@@ -200,6 +204,36 @@ def firewall():
         db.session.rollback()
         flash(f"Step 3: {exc}", "error")
         return _back(3)
+
+
+@audit_bp.post("/firewall/rules")
+def firewall_rules():
+    """Optional: the firewall's rule export, to name the rule behind each result."""
+    upload = request.files.get("export")
+    text, name = "", ""
+    if upload and upload.filename:
+        raw = upload.read(1024 * 1024 + 1)
+        encoding = "utf-16" if raw[:2] in (b"\xff\xfe", b"\xfe\xff") else "utf-8-sig"  # PowerShell ">" writes UTF-16
+        text, name = raw.decode(encoding, "replace"), upload.filename
+    else:
+        text = request.form.get("export_text", "")
+    try:
+        count, kind = audit.set_ruleset(text, name)
+        own = len((settings()[1].get("ruleset") or {}).get("input_rules") or [])
+        extra = f" and {own} INPUT rule(s) for traffic to the firewall itself" if own else ""
+        flash(f"Step 3: loaded {count} {'pfSense/OPNsense' if kind == 'pfsense' else 'Linux FORWARD'} rule(s){extra}. "
+              "Reports now name the rule behind each result.", "success")
+    except EnvironmentError as exc:
+        db.session.rollback()
+        flash(f"Step 3: {exc}", "error")
+    return _back(3)
+
+
+@audit_bp.post("/firewall/rules/remove")
+def firewall_rules_remove():
+    audit.clear_ruleset()
+    flash("Step 3: rule export removed.", "success")
+    return _back(3)
 
 
 @audit_bp.get("/firewall/status")
@@ -233,6 +267,13 @@ def _document(form, here_name):
         return audit.policy_document(f"Own rules · from {here_name}", checks), "own rules"
     _, environment = settings()
     groups = form.getlist("groups")
+    if form.get("scope") == "several":
+        used, skipped, document = build_multi_document(form.getlist("pack"), environment, groups or None)
+        names = ", ".join(sorted({pack["standard"] for pack in used}))
+        document["name"] = f"{len(used)} standard checks ({names}) · from {here_name}"[:120]
+        if skipped:
+            flash("Not included: " + "; ".join(f"{pack['title']} ({reason})" for pack, reason in skipped), "info")
+        return document, f"{len(used)} standard checks ({names})"
     pack, documents = build_pack_documents(form.get("pack", ""), environment, groups or None)
     if len(documents) > 1:
         raise EnvironmentError(f"This needs more than {MAX_WEB_PROBE_ATTEMPTS} attempts. Untick some probe kinds or remove hosts.")
@@ -248,9 +289,6 @@ def launch():
     if not data["here"]:
         flash("Step 1 first: tell SegCheck where this PC is.", "error")
         return _back(1)
-    if form.get("authorized") != "yes":
-        flash("Tick the authorisation box to confirm you may test these targets.", "error")
-        return _back(4)
     policy = None
     try:
         document, what = _document(form, data["here"]["name"])

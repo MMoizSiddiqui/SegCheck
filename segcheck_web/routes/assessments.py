@@ -8,7 +8,7 @@ from flask_login import current_user
 
 from segcheck_web.extensions import db, login_manager
 from segcheck_web.models import Assessment
-from segcheck_web.services import history, report_view
+from segcheck_web.services import compliance_assistant, history, report_view
 from segcheck_web.services.assessment_pdf import AssessmentPDFError, generate_assessment_pdf
 from segcheck_web.services.insights import assessment_breakdown
 from segcheck_web.services.report_analysis import analyse
@@ -81,6 +81,22 @@ def delete_all():
     return redirect(url_for("assessments.assessment_workspace"))
 
 
+@assessments_bp.get("/compare")
+def compare_assessments():
+    """Drift / regression: an earlier audit next to a later one."""
+    try:
+        first, second = int(request.args.get("a", "0")), int(request.args.get("b", "0"))
+    except ValueError:
+        abort(404)
+    records = [db.session.get(Assessment, first), db.session.get(Assessment, second)]
+    if None in records or first == second:
+        flash("Choose two different audits to compare.", "error")
+        return redirect(url_for("assessments.assessment_workspace"))
+    older, newer = sorted(records, key=lambda r: (r.created_at, r.id))
+    return render_template("assessments/compare.html", older=older, newer=newer,
+                           diff=report_view.compare(older.report, newer.report))
+
+
 @assessments_bp.get("/<int:assessment_id>")
 def assessment_detail(assessment_id):
     """Display one immutable, previously persisted assessment report."""
@@ -100,7 +116,10 @@ def assessment_detail(assessment_id):
         assessment_metadata=record.report.get("assessment", {}),
         breakdown=assessment_breakdown(record.report),
         analysis=_analysis(record.report),
-        view=report_view.build(record.report),
+        previous=db.session.query(Assessment).filter(Assessment.source_zone == record.source_zone, Assessment.id < record.id)
+        .order_by(Assessment.id.desc()).first(),
+        view=(view := report_view.build(record.report)),
+        assistant=compliance_assistant.assess(view, record.report.get("results", [])),
         run_map=(run_map := report_view.map_data(record)),
         zone_names={zone["key"]: zone["name"] for zone in run_map["zones"]},
     )

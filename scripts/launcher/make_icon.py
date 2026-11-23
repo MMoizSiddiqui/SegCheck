@@ -1,15 +1,15 @@
 """Draw the SegCheck icon (the two overlapping zone rings from the app's logo) as a Windows .ico.
 
-    python launcher/make_icon.py
+    python scripts/launcher/make_icon.py
 
-Writes launcher/segcheck.ico (used by SegCheck.exe) and segcheck_web/static/favicon.ico.
+Writes scripts/launcher/segcheck.ico (used by SegCheck.exe) and segcheck_web/static/favicon.ico.
 Needs Pillow, which SegCheck's environment already has (it comes with reportlab).
 """
 from pathlib import Path
 
 from PIL import Image, ImageDraw
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[2]
 BACKGROUND = (26, 21, 16, 255)   # --bg-1
 BORDER = (240, 145, 95, 90)      # soft orange edge
 ORANGE = (240, 145, 95, 255)     # ring A: one network zone
@@ -39,12 +39,12 @@ def draw(size=1024):
 
 def main():
     art = draw()
-    targets = [ROOT / "launcher" / "segcheck.ico", ROOT / "segcheck_web" / "static" / "favicon.ico"]
+    targets = [ROOT / "scripts" / "launcher" / "segcheck.ico", ROOT / "segcheck_web" / "static" / "favicon.ico"]
     for target in targets:
         target.parent.mkdir(parents=True, exist_ok=True)
         art.save(target, format="ICO", sizes=[(s, s) for s in SIZES])
         print(target)
-    art.resize((256, 256), Image.LANCZOS).save(ROOT / "launcher" / "segcheck-256.png")
+    art.resize((256, 256), Image.LANCZOS).save(ROOT / "scripts" / "launcher" / "segcheck-256.png")
 
 
 if __name__ == "__main__":

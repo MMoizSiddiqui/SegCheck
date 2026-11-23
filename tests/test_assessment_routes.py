@@ -205,7 +205,7 @@ def test_saved_assessment_detail_displays_persisted_report(
     assert b"PROBE-DETAIL-TEST" in response.data
     assert b"CHECK-DETAIL" in response.data
     assert b"Saved detail test" in response.data
-    assert b"Not configured" in response.data
+    assert b"Not configured" not in response.data, "the unused pfSense-file evidence panel stays hidden"
     assert b"Rule by rule" in response.data and b"Results cover" in response.data
 
 

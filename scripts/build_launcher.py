@@ -1,4 +1,4 @@
-"""Build SegCheck.exe, the double-click launcher (launcher/SegCheck.cs), with the SegCheck icon.
+"""Build SegCheck.exe, the double-click launcher (scripts/launcher/SegCheck.cs), with the SegCheck icon.
 
     python scripts/build_launcher.py [--out <folder>]
 
@@ -14,8 +14,8 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-SOURCE = ROOT / "launcher" / "SegCheck.cs"
-ICON = ROOT / "launcher" / "segcheck.ico"
+SOURCE = ROOT / "scripts" / "launcher" / "SegCheck.cs"
+ICON = ROOT / "scripts" / "launcher" / "segcheck.ico"
 
 
 def compiler() -> Path:
@@ -43,7 +43,7 @@ def build(out_dir: Path = ROOT) -> Path:
     return target
 
 
-STAMP = ROOT / "launcher" / "SegCheck.exe.built-from"
+STAMP = ROOT / "scripts" / "launcher" / "SegCheck.exe.built-from"
 
 
 def source_digest() -> str:
